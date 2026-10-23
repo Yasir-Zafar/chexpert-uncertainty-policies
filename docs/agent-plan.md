@@ -100,9 +100,11 @@ uncert-cxr/
   chexpert_uncertainty.ipynb
   notebook_src.py
   README.md
+  Makefile  pyproject.toml (ruff config)  .pre-commit-config.yaml
+  docs/                         (this plan, the proposal PDF)
   splits/split_seed42.csv
   qual/qual_ids.csv
-  tools/fake_chexpert.py
+  tools/fake_chexpert.py  tools/status.py
   runs/<policy>_s<seed>/        (arrives from the run branches)
   results/tables/  results/figures/
 ```
