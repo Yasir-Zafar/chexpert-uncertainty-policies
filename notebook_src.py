@@ -49,8 +49,10 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 
 # %%
 import base64
+import hashlib
 import platform
 import random
+import re
 import subprocess
 from pathlib import Path
 
@@ -236,3 +238,89 @@ for d in (TABLES_DIR, FIGURES_DIR):
 print(f"kaggle={IS_KAGGLE} run_by={RUN_BY} token={'set' if GITHUB_PAT else 'not set'}")
 print(f"data root: {DATA_ROOT}")
 print(f"repo dir:  {REPO_DIR}")
+
+# %% [markdown]
+# # Part 1: Data preparation
+#
+# ## 1.1 Load and filter
+#
+# Reads the official `train.csv` (training data) and `valid.csv` (our test set: 200 studies
+# labelled by three board-certified radiologists, no uncertain class). The `Path` prefix that
+# differs between mirrors is stripped, so `path` (e.g. `train/patient00001/study1/
+# view1_frontal.jpg`) is the stable row id everywhere. Rows are filtered to frontal views, then
+# to AP or PA position, with the count printed after each step.
+#
+# Raw label values are kept as read (1, 0, -1, or blank for *not mentioned*). Blanks become 0
+# only when a label matrix is built (`label_matrix`), so the dataset statistics can still count
+# not-mentioned entries separately. The data fingerprint (SHA-256 over both CSVs) is recorded
+# with every run so results mode can prove all runs used the same data.
+
+# %%
+EXPECTED_RAW_ROWS = {"train": 223_414, "valid": 234}  # official CheXpert-small CSVs
+_PREFIX = re.compile(r"^.*?(?=(?:train|valid)/patient\d+/)")
+_PATH_FORMAT = r"^(train|valid)/patient\d+/study\d+/view\d+_\w+\.jpg$"
+
+
+def sha256_file(path: Path) -> str:
+    """Hex SHA-256 of a file's bytes."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_split_csv(name: str) -> pd.DataFrame:
+    """Load ``<name>.csv``, strip the path prefix and keep frontal AP/PA rows with parsed ids."""
+    raw = pd.read_csv(DATA_ROOT / f"{name}.csv")
+    expected = EXPECTED_RAW_ROWS[name]
+    if IS_KAGGLE:
+        assert len(raw) == expected, f"{name}.csv: {len(raw)} rows, official mirror has {expected}"
+    elif len(raw) != expected:
+        print(f"note: {name}.csv has {len(raw)} rows (official {expected}); not the real dataset")
+    df = raw.assign(path=raw["Path"].str.replace(_PREFIX, "", regex=True))
+    assert df["path"].str.match(_PATH_FORMAT).all(), f"unexpected Path format in {name}.csv"
+
+    frontal = df[df["Frontal/Lateral"] == "Frontal"]
+    kept = frontal[frontal["AP/PA"].isin(["AP", "PA"])]
+    print(f"{name}.csv: {len(df):>7,} rows -> {len(frontal):>7,} frontal -> {len(kept):>7,} AP/PA")
+
+    parts = kept["path"].str.split("/")
+    out = pd.DataFrame(
+        {
+            "path": kept["path"],
+            "patient_id": parts.str[1],
+            "study_id": parts.str[1] + "/" + parts.str[2],
+            "view": kept["AP/PA"],
+        }
+    )
+    out[PATHOLOGIES] = kept[PATHOLOGIES]
+    return out.reset_index(drop=True)
+
+
+def label_matrix(df: pd.DataFrame) -> np.ndarray:
+    """(n, 5) int8 labels: 1 positive, 0 negative or not mentioned, -1 uncertain."""
+    return df[PATHOLOGIES].fillna(0).to_numpy(dtype=np.int8)
+
+
+TRAIN_ALL = load_split_csv("train")
+TEST = load_split_csv("valid")
+
+train_values = set(np.unique(TRAIN_ALL[PATHOLOGIES].to_numpy()[~TRAIN_ALL[PATHOLOGIES].isna()]))
+assert train_values <= {-1.0, 0.0, 1.0}, f"unexpected train label values {train_values}"
+assert TEST[PATHOLOGIES].notna().all().all(), "test labels must have no blanks"
+assert set(np.unique(TEST[PATHOLOGIES])) <= {0.0, 1.0}, "test labels must be 0 or 1"
+assert not set(TRAIN_ALL["patient_id"]) & set(TEST["patient_id"]), "train/test patients overlap"
+assert TRAIN_ALL["path"].is_unique and TEST["path"].is_unique
+
+check_rng = np.random.default_rng(0)
+for frame in (TRAIN_ALL, TEST):
+    sample = check_rng.choice(frame["path"].to_numpy(), size=min(20, len(frame)), replace=False)
+    missing = [p for p in sample if not (DATA_ROOT / p).is_file()]
+    assert not missing, f"image files missing under {DATA_ROOT}: {missing[:3]}"
+
+DATA_FINGERPRINT = hashlib.sha256(
+    (sha256_file(DATA_ROOT / "train.csv") + sha256_file(DATA_ROOT / "valid.csv")).encode()
+).hexdigest()
+print(f"test: {TEST['study_id'].nunique()} studies, {TEST['patient_id'].nunique()} patients")
+print(f"data fingerprint: {DATA_FINGERPRINT}")
