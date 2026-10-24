@@ -50,11 +50,16 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 # %%
 import base64
 import hashlib
+import json
+import math
 import platform
 import random
 import re
+import shutil
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,6 +115,18 @@ PATHOLOGIES = CONFIG["pathologies"]
 assert MODE in ("train", "results"), f"MODE must be 'train' or 'results', got {MODE!r}"
 assert SEED in CONFIG["seeds"], f"SEED must be one of {CONFIG['seeds']}, got {SEED}"
 assert N_SEEDS in ("1", "2", "3", "auto"), f"N_SEEDS must be 1, 2, 3 or auto, got {N_SEEDS!r}"
+
+# A smoke pass (SMOKE=1) checks that a run works end to end in minutes: a data subset, two
+# epochs and a short monitoring interval. Its results go to runs_smoke/ and are never used.
+# The environment variables only matter for local CPU checks; on Kaggle the defaults apply.
+RUN_LIMITS = {
+    "train_images": int(os.environ.get("SMOKE_TRAIN", 2000)) if SMOKE else None,
+    "val_images": int(os.environ.get("SMOKE_VAL", 500)) if SMOKE else None,
+    "qual_images": int(os.environ.get("SMOKE_QUAL", 600)) if SMOKE else None,
+    "max_epochs": int(os.environ.get("SMOKE_EPOCHS", 2)) if SMOKE else CONFIG["max_epochs"],
+    "batch_size": int(os.environ.get("SMOKE_BATCH", 32)) if SMOKE else CONFIG["batch_size"],
+    "grad_stats_every": 5 if SMOKE else CONFIG["grad_stats_every"],
+}
 
 
 def seed_everything(seed: int) -> None:
@@ -639,7 +656,7 @@ def make_loader(
     dataset = CheXpertDataset(df, augment=train)
     return DataLoader(
         dataset,
-        batch_size=CONFIG["batch_size"],
+        batch_size=RUN_LIMITS["batch_size"],
         sampler=EpochSampler(len(dataset), seed) if train else None,
         num_workers=workers,
         pin_memory=torch.cuda.is_available(),
@@ -1224,3 +1241,647 @@ assert always_better["p"] == 2 / (len(boot) + 1), "p-value must be two-sided"
 point, lo, hi = bootstrap_ci(lambda i: auroc(y_r[i], s_r[i]), boot, 200)
 assert lo < point < hi
 print(f"metrics ok: AUROC {point:.3f} (95% CI {lo:.3f}-{hi:.3f}) on a random check set")
+
+# %% [markdown]
+# # Part 3: Training run (`MODE == "train"`)
+#
+# ## 3.1 Training functions
+#
+# One recipe for every policy (proposal Table III): AdamW (lr 1e-4, betas 0.9/0.999, weight
+# decay 1e-5), batch 32, up to 10 epochs, learning rate x0.1 when the validation mean AUROC has
+# not improved for one epoch, early stopping after three epochs without improvement, FP16 mixed
+# precision on the GPU. The policy only supplies the head size, the loss and the validation
+# labels.
+#
+# Early stopping and the scheduler follow the validation mean AUROC computed with the policy's
+# own validation labels (the proposal's rule); that checkpoint is `best.pt`. Because those labels
+# differ between policies, the epoch with the best *certain-only* AUROC is also kept
+# (`best_certain.pt`) for the selection-sensitivity table T9.
+#
+# Monitoring never slows a step: one log line every 50 steps, gradient norm and loss scale
+# every 200 steps, and a background thread that samples `nvidia-smi` every 10 seconds. A
+# non-finite loss stops the run with the reason recorded. Checkpoints stay in the Kaggle
+# working directory and are never pushed.
+
+# %%
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+USE_AMP = CONFIG["amp"] and DEVICE.type == "cuda"
+torch.backends.cudnn.benchmark = CONFIG["cudnn_benchmark"]
+assert CONFIG["optimizer"] == "AdamW"
+
+
+class TrainingFailure(RuntimeError):
+    """Training had to stop (for example a non-finite loss); the message is the reason."""
+
+
+def make_logger(path: Path) -> Callable[[str], None]:
+    """Logger that prints a line and appends it to ``path``."""
+
+    def log(message: str) -> None:
+        line = f"{time.strftime('%H:%M:%S')} {message}"
+        print(line, flush=True)
+        with open(path, "a") as f:
+            f.write(line + "\n")
+
+    return log
+
+
+def build_model(policy: Policy, seed: int, pretrained: bool = True) -> DenseNetClassifier:
+    """The shared DenseNet-121 with this policy's head, on ``DEVICE``."""
+    model = DenseNetClassifier(policy.n_outputs, policy.dropout_p, seed, pretrained).to(DEVICE)
+    if CONFIG["channels_last"]:
+        model = model.to(memory_format=torch.channels_last)
+    return model
+
+
+def make_optimizer(model: nn.Module) -> torch.optim.Optimizer:
+    """AdamW with the frozen protocol settings."""
+    return torch.optim.AdamW(
+        model.parameters(),
+        lr=CONFIG["lr"],
+        betas=CONFIG["betas"],
+        weight_decay=CONFIG["weight_decay"],
+    )
+
+
+class GpuTrace:
+    """Background thread sampling ``nvidia-smi`` into a CSV; does nothing without a GPU."""
+
+    FIELDS = "utilization.gpu,memory.used,clocks.sm,power.draw"
+
+    def __init__(self, path: Path, interval_s: float = 10.0) -> None:
+        self.path, self.interval_s = path, interval_s
+        self.enabled = DEVICE.type == "cuda" and shutil.which("nvidia-smi") is not None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+
+    def _sample(self) -> None:
+        query = ["nvidia-smi", f"--query-gpu={self.FIELDS}", "--format=csv,noheader,nounits"]
+        while True:
+            out = subprocess.run(query + ["-i", "0"], capture_output=True, text=True).stdout
+            with open(self.path, "a") as f:
+                f.write(f"{time.time() - self._start:.0f},{out.strip()}\n")
+            if self._stop.wait(self.interval_s):
+                return
+
+    def __enter__(self) -> "GpuTrace":
+        if self.enabled:
+            self.path.write_text(f"time_s,{self.FIELDS}\n")
+            self._start = time.time()
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.enabled:
+            self._stop.set()
+            self._thread.join()
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    policy: Policy,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    generator: torch.Generator,
+    epoch: int,
+    grad_log: list[dict],
+    log: Callable[[str], None],
+) -> dict:
+    """One pass over ``loader``; returns the mean loss, seconds and images per second."""
+    model.train()
+    loader.sampler.set_epoch(epoch)
+    n_steps, seen = len(loader), 0
+    loss_sum = torch.zeros((), device=DEVICE)  # summed on the device: no sync per step
+    start = time.perf_counter()
+    for step, (x, y, _) in enumerate(loader, start=1):
+        x, y = to_model_input(x, DEVICE), y.to(DEVICE, non_blocking=True)
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            logits = model(x)
+        loss = policy.loss(logits, y, generator)  # float32 inside every policy loss
+        optimizer.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        if step % RUN_LIMITS["grad_stats_every"] == 0:
+            scaler.unscale_(optimizer)
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), math.inf)  # measure only
+            grad_log.append(
+                {
+                    "epoch": epoch,
+                    "step": step,
+                    "grad_norm": norm.item(),
+                    "loss_scale": scaler.get_scale(),
+                }
+            )
+        scaler.step(optimizer)
+        scaler.update()
+        loss_sum += loss.detach() * len(x)
+        seen += len(x)
+        if step % CONFIG["log_every"] == 0 or step == n_steps:
+            mean_loss = (loss_sum / seen).item()
+            if not math.isfinite(mean_loss):
+                raise TrainingFailure(f"non-finite loss in epoch {epoch} by step {step}")
+            elapsed = time.perf_counter() - start
+            eta_min = (n_steps - step) * elapsed / step / 60
+            lr = optimizer.param_groups[0]["lr"]
+            log(
+                f"epoch {epoch} step {step}/{n_steps} loss {mean_loss:.4f} "
+                f"{seen / elapsed:.0f} img/s eta {eta_min:.1f} min lr {lr:.1e} "
+                f"scale {scaler.get_scale():.0f}"
+            )
+    seconds = time.perf_counter() - start
+    return {"train_loss": mean_loss, "train_seconds": seconds, "images_per_sec": seen / seconds}
+
+
+@torch.no_grad()
+def predict_logits(model: nn.Module, loader: DataLoader) -> np.ndarray:
+    """Logits for every row of an unshuffled loader, in row order, as float32."""
+    model.eval()
+    outputs = []
+    for x, _, _ in loader:
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            outputs.append(model(to_model_input(x, DEVICE)).float().cpu())
+    return torch.cat(outputs).numpy()
+
+
+def scores_from_logits(policy: Policy, logits: np.ndarray) -> np.ndarray:
+    """Per-pathology probabilities from saved logits."""
+    return policy.score(torch.from_numpy(logits)).numpy()
+
+
+def validation_aurocs(policy: Policy, y_raw: np.ndarray, scores: np.ndarray) -> tuple[float, float]:
+    """Mean validation AUROC with policy-resolved labels, and with certain labels only."""
+    resolved = per_pathology(auroc, policy.val_labels(y_raw), scores)
+    certain = per_pathology(auroc, certain_labels(y_raw), scores)
+    return float(np.nanmean(resolved)), float(np.nanmean(certain))
+
+
+def fit(
+    policy: Policy,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    seed: int,
+    max_epochs: int,
+    run_dir: Path,
+    ckpt_dir: Path,
+    log: Callable[[str], None],
+    on_epoch_end: Callable[[], None] | None = None,
+) -> tuple[nn.Module, dict]:
+    """Train one policy; return the model restored to ``best.pt`` and a run summary."""
+    seed_everything(seed)
+    model = build_model(policy, seed)
+    optimizer = make_optimizer(model)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=CONFIG["plateau_factor"], patience=CONFIG["plateau_patience"]
+    )
+    scaler = torch.amp.GradScaler(DEVICE.type, enabled=USE_AMP)
+    generator = torch.Generator().manual_seed(seed)  # LSR target draws
+    train_loader = make_loader(train_df, train=True, seed=seed)
+    val_loader = make_loader(val_df, train=False, seed=seed)
+    y_val = label_matrix(val_df)
+    if DEVICE.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
+    history, grad_log = [], []
+    best = {"best.pt": (-math.inf, 0), "best_certain.pt": (-math.inf, 0)}
+    stale, stop_reason = 0, "max_epochs"
+    for epoch in range(1, max_epochs + 1):
+        stats = train_one_epoch(
+            model, train_loader, policy, optimizer, scaler, generator, epoch, grad_log, log
+        )
+        scores = scores_from_logits(policy, predict_logits(model, val_loader))
+        val_auroc, val_certain = validation_aurocs(policy, y_val, scores)
+        if not (math.isfinite(val_auroc) and math.isfinite(val_certain)):
+            raise TrainingFailure(f"validation AUROC is undefined in epoch {epoch}")
+        lr = optimizer.param_groups[0]["lr"]
+        scheduler.step(val_auroc)
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if DEVICE.type == "cuda" else 0.0
+        history.append(
+            {
+                "epoch": epoch,
+                **stats,
+                "val_auroc": val_auroc,
+                "val_auroc_certain": val_certain,
+                "lr": lr,
+                "peak_mem_gb": peak_gb,
+            }
+        )
+        pd.DataFrame(history).to_csv(run_dir / "metrics_epoch.csv", index=False)
+        pd.DataFrame(grad_log, columns=["epoch", "step", "grad_norm", "loss_scale"]).to_csv(
+            run_dir / "grad_stats.csv", index=False
+        )
+        improved = val_auroc > best["best.pt"][0]
+        if improved:
+            best["best.pt"] = (val_auroc, epoch)
+            torch.save(model.state_dict(), ckpt_dir / "best.pt")
+        if val_certain > best["best_certain.pt"][0]:
+            best["best_certain.pt"] = (val_certain, epoch)
+            if improved:  # same epoch: one file, copied, so the two are identical by construction
+                shutil.copyfile(ckpt_dir / "best.pt", ckpt_dir / "best_certain.pt")
+            else:
+                torch.save(model.state_dict(), ckpt_dir / "best_certain.pt")
+        stale = 0 if improved else stale + 1
+        log(
+            f"epoch {epoch} done: val AUROC {val_auroc:.4f} (certain-only {val_certain:.4f}), "
+            f"best epoch {best['best.pt'][1]}, {stats['images_per_sec']:.0f} img/s"
+        )
+        if on_epoch_end is not None:
+            on_epoch_end()
+        if stale >= CONFIG["early_stop_patience"]:
+            stop_reason = "early_stop"
+            break
+
+    model.load_state_dict(torch.load(ckpt_dir / "best.pt", map_location=DEVICE, weights_only=True))
+    summary = {
+        "best_epoch": best["best.pt"][1],
+        "best_certain_epoch": best["best_certain.pt"][1],
+        "epochs_run": len(history),
+        "stop_reason": stop_reason,
+        "train_seconds": sum(h["train_seconds"] for h in history),
+        "images_per_sec": float(np.mean([h["images_per_sec"] for h in history])),
+        "peak_mem_gb": max(h["peak_mem_gb"] for h in history),
+    }
+    return model, summary
+
+
+# Check: every policy's loss falls on a repeated small batch (random backbone, 64 x 64 input).
+small_x = F.interpolate(batch[:8], size=64, mode="bilinear", align_corners=False)
+small_y = y_ex.repeat(4, 1)
+for name, policy in POLICIES.items():
+    torch.manual_seed(SEED)
+    net = DenseNetClassifier(policy.n_outputs, policy.dropout_p, SEED, pretrained=False)
+    opt = torch.optim.AdamW(net.parameters(), lr=1e-3)
+    gen = torch.Generator().manual_seed(SEED)
+    losses = []
+    for _ in range(8):
+        step_loss = policy.loss(net(small_x), small_y, gen)
+        opt.zero_grad()
+        step_loss.backward()
+        opt.step()
+        losses.append(step_loss.item())
+    assert losses[-1] < losses[0], f"{name}: loss did not fall on a repeated batch: {losses}"
+print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for every policy")
+
+# %% [markdown]
+# ## 3.2 Run it
+#
+# Trains the selected `POLICY` at `SEED` and writes everything a run produces into
+# `runs/<policy>_s<seed>/` (`runs_smoke/` for a smoke pass): the per-epoch metrics, gradient
+# statistics, the GPU trace, the training log and `run_info.json`. `run_info.json` records the
+# policy, seed, code version, the full `CONFIG`, the split and data fingerprints, the hardware
+# and the outcome, and its `status` moves from `running` to `trained` (and to `complete` once
+# the predictions are written in section 3.3) or `failed` with the reason. A run that dies
+# mid-way therefore never looks finished.
+#
+# Checkpoints go to `checkpoints/`, which is never pushed.
+
+# %%
+RUN_NAME = f"{POLICY}_s{SEED}"
+RUN_DIR = REPO_DIR / ("runs_smoke" if SMOKE else "runs") / RUN_NAME
+CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
+
+
+def environment_info() -> dict:
+    """Hardware and library versions recorded with every run."""
+    on_gpu = DEVICE.type == "cuda"
+    return {
+        "gpu_name": torch.cuda.get_device_name() if on_gpu else "cpu",
+        "gpu_count": torch.cuda.device_count(),
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "python": platform.python_version(),
+    }
+
+
+def write_run_info(status: str, **extra) -> dict:
+    """Create or update ``run_info.json`` with a new status and fields; return the record."""
+    path = RUN_DIR / "run_info.json"
+    if path.exists():
+        info = json.loads(path.read_text())
+    else:
+        info = {
+            "policy": POLICY,
+            "seed": SEED,
+            "code_version": CONFIG["code_version"],
+            "smoke": SMOKE,
+            "config": CONFIG,
+            "run_limits": RUN_LIMITS,
+            "split_sha256": SPLIT_SHA256,
+            "data_fingerprint": DATA_FINGERPRINT,
+            "run_by": RUN_BY,
+            **environment_info(),
+        }
+    info.update(status=status, **extra)
+    path.write_text(json.dumps(info, indent=2))
+    return info
+
+
+if MODE == "train":
+    if RUN_DIR.exists() and any(RUN_DIR.iterdir()):
+        raise FileExistsError(f"{RUN_DIR} is not empty; remove it to start this run again")
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    CKPT_DIR.mkdir(parents=True, exist_ok=True)
+
+    policy = POLICIES[POLICY]
+    train_df, val_df = TRAIN, VAL
+    if SMOKE:
+        n_train = min(RUN_LIMITS["train_images"], len(TRAIN))
+        n_val = min(RUN_LIMITS["val_images"], len(VAL))
+        train_df = TRAIN.sample(n=n_train, random_state=CONFIG["split_seed"], ignore_index=True)
+        val_df = VAL.sample(n=n_val, random_state=CONFIG["split_seed"], ignore_index=True)
+
+    log = make_logger(RUN_DIR / "train.log")
+    log(f"run {RUN_NAME} by {RUN_BY} on {DEVICE} ({'smoke' if SMOKE else 'full'} run)")
+    log(f"{len(train_df):,} training and {len(val_df):,} validation images")
+    log(f"split {SPLIT_SHA256[:12]}, data {DATA_FINGERPRINT[:12]}")
+    write_run_info(
+        "running",
+        started=time.strftime("%Y-%m-%d %H:%M:%S"),
+        n_train_images=len(train_df),
+        n_val_images=len(val_df),
+    )
+    try:
+        with GpuTrace(RUN_DIR / "gpu_trace.csv"):
+            model, summary = fit(
+                policy,
+                train_df,
+                val_df,
+                SEED,
+                RUN_LIMITS["max_epochs"],
+                RUN_DIR,
+                CKPT_DIR,
+                log,
+            )
+    except Exception as err:
+        log(f"FAILED: {err!r}")
+        write_run_info("failed", failure=repr(err))
+        raise
+    info = write_run_info("trained", trainable_params=count_trainable_params(model), **summary)
+    log(f"trained: best epoch {info['best_epoch']} of {info['epochs_run']} ({info['stop_reason']})")
+
+    # Checks on what the run wrote.
+    metrics = pd.read_csv(RUN_DIR / "metrics_epoch.csv")
+    assert len(metrics) == info["epochs_run"] and not metrics.isna().any().any(), "bad epoch log"
+    steps = math.ceil(len(train_df) / RUN_LIMITS["batch_size"])
+    expected_rows = info["epochs_run"] * (steps // RUN_LIMITS["grad_stats_every"])
+    n_grad_rows = len(pd.read_csv(RUN_DIR / "grad_stats.csv"))
+    assert n_grad_rows == expected_rows, (
+        f"grad_stats has {n_grad_rows} rows, expected {expected_rows}"
+    )
+    if info["best_epoch"] == info["best_certain_epoch"]:
+        assert sha256_file(CKPT_DIR / "best.pt") == sha256_file(CKPT_DIR / "best_certain.pt")
+    if DEVICE.type == "cuda":
+        assert len(pd.read_csv(RUN_DIR / "gpu_trace.csv")) >= 1, "GPU trace is empty"
+    print(metrics.to_string(index=False, float_format="%.4f"))
+
+# %% [markdown]
+# ## 3.3 Predictions and run artifacts
+#
+# After training, the model (restored to `best.pt`) predicts the internal-validation images and
+# the test images, and the run folder is completed:
+#
+# - `val_preds.npz`, `test_preds.npz`: image path (the row id), logits and scores. **They contain
+#   no CheXpert labels**: the repository is public and the dataset licence forbids sharing the
+#   data, so results mode joins the labels back from the CSVs by path.
+# - `val_preds_certain.npz`, `test_preds_certain.npz`: the same for `best_certain.pt`, written
+#   only when that checkpoint comes from a different epoch.
+# - `mc_val.npz`, `mc_test.npz` (MC Dropout policy only): the mean of 20 stochastic passes,
+#   its predictive entropy and the dropout-off score. `val_preds.npz` of that run is the
+#   dropout-off prediction, so both versions are available to the results tables. The backbone
+#   runs once; dropout and the linear head are applied 20 times to the cached 1024-d features,
+#   which is exactly 20 full passes because the backbone is deterministic at inference.
+# - `cam_test.npz`, `cam_val_subset.npz`: class activation maps (10 x 10) for every test image
+#   and the fixed qualitative validation images.
+# - Cost measurements in `run_info.json`: inference time per image, GFLOPs per image and, for
+#   the MC policy, the time of the 20 head passes per image.
+#
+# Finally the status becomes `complete`; a run without it is ignored by results mode.
+
+# %%
+LABEL_KEYS = {"label", "labels", "y", "y_raw", "y_true"}
+
+
+def save_npz(file: Path, /, **arrays: np.ndarray) -> None:
+    """Write arrays to a compressed .npz; refuses names that suggest CheXpert labels."""
+    assert not LABEL_KEYS & set(arrays), f"{file.name}: labels must not be saved in run files"
+    np.savez_compressed(file, **arrays)
+
+
+def load_checkpoint(model: nn.Module, name: str) -> None:
+    """Load ``checkpoints/<run>/<name>`` into ``model``."""
+    model.load_state_dict(torch.load(CKPT_DIR / name, map_location=DEVICE, weights_only=True))
+
+
+def predict_df(model: nn.Module, df: pd.DataFrame) -> np.ndarray:
+    """Logits for every row of ``df``, in row order."""
+    return predict_logits(model, make_loader(df, train=False, seed=SEED))
+
+
+def write_predictions(
+    policy: Policy, split: str, df: pd.DataFrame, logits: np.ndarray, suffix: str = ""
+) -> np.ndarray:
+    """Save path, logits and scores (never labels) as ``<split>_preds<suffix>.npz``."""
+    scores = scores_from_logits(policy, logits)
+    save_npz(
+        RUN_DIR / f"{split}_preds{suffix}.npz",
+        path=df["path"].to_numpy(),
+        logits=logits,
+        scores=scores,
+    )
+    return scores
+
+
+@torch.no_grad()
+def extract_features_df(model: DenseNetClassifier, df: pd.DataFrame) -> torch.Tensor:
+    """Pooled 1024-d backbone features for every row of ``df``, (N, 1024) on ``DEVICE``."""
+    model.eval()
+    outputs = []
+    for x, _, _ in make_loader(df, train=False, seed=SEED):
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            outputs.append(model.extract_features(to_model_input(x, DEVICE)).float())
+    return torch.cat(outputs)
+
+
+@torch.no_grad()
+def mc_probabilities(
+    model: DenseNetClassifier,
+    features: torch.Tensor,
+    score: Callable[[torch.Tensor], torch.Tensor],
+    passes: int,
+    seed: int,
+) -> torch.Tensor:
+    """(passes, N, 5) probabilities: dropout and head applied ``passes`` times to ``features``.
+
+    Only the dropout layer is stochastic; the generator is seeded so the masks repeat.
+    """
+    model.eval()
+    model.dropout.train()
+    devices = [features.device.index or 0] if features.device.type == "cuda" else []
+    try:
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(seed)
+            return torch.stack([score(model.classify(features)) for _ in range(passes)])
+    finally:
+        model.eval()
+
+
+def mc_arrays(
+    model: DenseNetClassifier, policy: Policy, df: pd.DataFrame, deterministic: np.ndarray
+) -> dict[str, np.ndarray]:
+    """MC Dropout outputs for ``df``: mean probability, predictive entropy, dropout-off score."""
+    features = extract_features_df(model, df)
+    probs = mc_probabilities(model, features, policy.score, CONFIG["mc_passes"], SEED)
+    mean = probs.mean(dim=0).cpu().numpy()
+    return {
+        "path": df["path"].to_numpy(),
+        "mean": mean,
+        "entropy": binary_entropy(mean.astype(np.float64)).astype(np.float32),
+        "deterministic": deterministic,
+    }
+
+
+def mc_equivalence_gap(model: DenseNetClassifier, policy: Policy, x: torch.Tensor) -> float:
+    """Largest difference between cached-feature MC and a naive loop of full passes on ``x``."""
+    passes = CONFIG["mc_passes"]
+    cached = mc_probabilities(model, model.extract_features(x), policy.score, passes, SEED)
+    model.eval()
+    model.dropout.train()
+    devices = [x.device.index or 0] if x.device.type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
+        torch.manual_seed(SEED)
+        naive = torch.stack([policy.score(model(x)) for _ in range(passes)])
+    model.eval()
+    return (cached - naive).abs().max().item()
+
+
+def compute_cams(model: DenseNetClassifier, df: pd.DataFrame, rows: list[int]) -> np.ndarray:
+    """Class activation maps for head ``rows``, (N, len(rows), 10, 10), in float32."""
+    model.eval()
+    maps = []
+    for x, _, _ in make_loader(df, train=False, seed=SEED):
+        maps.append(model.cam(to_model_input(x, DEVICE), rows).float().cpu())
+    return torch.cat(maps).numpy()
+
+
+def random_batch(batch_size: int) -> torch.Tensor:
+    """A model-ready batch of random images, for timing and FLOP counting."""
+    size = CONFIG["image_size"]
+    raw = torch.randint(0, 256, (batch_size, 1, size, size), dtype=torch.uint8)
+    return to_model_input(raw, DEVICE)
+
+
+@torch.no_grad()
+def time_per_image(fn: Callable[[], object], batch_size: int, warmup: int, timed: int) -> float:
+    """Milliseconds per image for ``fn`` (one batch), after warm-up, with GPU synchronisation."""
+    sync = torch.cuda.synchronize if DEVICE.type == "cuda" else (lambda: None)
+    for _ in range(warmup):
+        fn()
+    sync()
+    start = time.perf_counter()
+    for _ in range(timed):
+        fn()
+    sync()
+    return (time.perf_counter() - start) / (timed * batch_size) * 1000
+
+
+@torch.no_grad()
+def gflops_per_image(model: nn.Module) -> float:
+    """GFLOPs (multiply-adds counted as two) of one forward pass on a single image."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    model.eval()
+    with FlopCounterMode(display=False) as counter:
+        model(random_batch(1))
+    return counter.get_total_flops() / 1e9
+
+
+if MODE == "train":
+    ids_val, ids_test = val_df["path"].to_numpy(), TEST["path"].to_numpy()
+    model.eval()
+
+    # Primary checkpoint (best.pt): validation and test predictions.
+    val_logits, test_logits = predict_df(model, val_df), predict_df(model, TEST)
+    val_scores = write_predictions(policy, "val", val_df, val_logits)
+    test_scores = write_predictions(policy, "test", TEST, test_logits)
+    recomputed = validation_aurocs(policy, label_matrix(val_df), val_scores)[0]
+    logged = float(metrics.loc[metrics["epoch"] == info["best_epoch"], "val_auroc"].iloc[0])
+    assert abs(recomputed - logged) < 1e-3, f"saved predictions give {recomputed}, log {logged}"
+    log(f"predictions written; validation AUROC {recomputed:.4f} matches the epoch log")
+
+    # Second checkpoint (best_certain.pt): its own files only when it is a different epoch.
+    certain_differs = info["best_certain_epoch"] != info["best_epoch"]
+    load_checkpoint(model, "best_certain.pt")
+    if certain_differs:
+        write_predictions(policy, "val", val_df, predict_df(model, val_df), "_certain")
+        write_predictions(policy, "test", TEST, predict_df(model, TEST), "_certain")
+    else:
+        same = predict_df(model, TEST)
+        assert np.allclose(same, test_logits, atol=1e-3), "best_certain.pt should equal best.pt"
+    load_checkpoint(model, "best.pt")
+
+    # MC Dropout: cached-feature passes must equal a naive loop of full passes.
+    if policy.mc:
+        probe = next(iter(make_loader(val_df.head(4), train=False, seed=SEED, num_workers=0)))
+        gap = mc_equivalence_gap(model, policy, to_model_input(probe[0], DEVICE))
+        assert gap < 1e-5, f"cached MC differs from {CONFIG['mc_passes']} full passes by {gap:.2e}"
+        mc_val = mc_arrays(model, policy, val_df, val_scores)
+        mc_test = mc_arrays(model, policy, TEST, test_scores)
+        for name, arrays in [("val", mc_val), ("test", mc_test)]:
+            save_npz(RUN_DIR / f"mc_{name}.npz", **arrays)
+            assert ((arrays["mean"] >= 0) & (arrays["mean"] <= 1)).all()
+            assert arrays["entropy"].min() >= 0 and arrays["entropy"].max() <= np.log(2) + 1e-6
+        assert not np.allclose(mc_val["mean"], mc_val["deterministic"]), "dropout had no effect"
+        log(f"MC Dropout outputs written (cached vs naive passes differ by {gap:.1e})")
+
+    # Class activation maps: every test image and the fixed qualitative validation images.
+    cam_val_df = qual_val.head(RUN_LIMITS["qual_images"]) if SMOKE else qual_val
+    for name, frame in [("test", TEST), ("val_subset", cam_val_df)]:
+        maps = compute_cams(model, frame, policy.cam_rows)
+        assert maps.shape == (len(frame), N_PATH, 10, 10) and np.isfinite(maps).all()
+        save_npz(RUN_DIR / f"cam_{name}.npz", path=frame["path"].to_numpy(), cam=maps)
+
+    # Cost: inference time on a model-ready random batch, FLOPs and the MC head cost.
+    batch = RUN_LIMITS["batch_size"]
+    warmup, timed = (3, 20) if DEVICE.type == "cuda" else (1, 2)
+    x_time = random_batch(batch)
+    with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+        ms_per_image = time_per_image(lambda: model(x_time), batch, warmup, timed)
+    costs = {
+        "inference_ms_per_image": ms_per_image,
+        "inference_batch_size": batch,
+        "gflops_per_image": gflops_per_image(model),
+    }
+    assert costs["gflops_per_image"] > 0 and costs["inference_ms_per_image"] > 0
+    if policy.mc:
+        feats = model.extract_features(x_time).detach()
+        costs["mc_head_ms_per_image"] = time_per_image(
+            lambda: mc_probabilities(model, feats, policy.score, CONFIG["mc_passes"], SEED),
+            batch,
+            warmup,
+            timed,
+        )
+    log(f"inference {ms_per_image:.2f} ms/image, {costs['gflops_per_image']:.1f} GFLOPs/image")
+
+    # Final check of the run folder: expected files only, small enough to push, no labels.
+    expected = {
+        "run_info.json", "metrics_epoch.csv", "grad_stats.csv", "train.log",
+        "val_preds.npz", "test_preds.npz", "cam_test.npz", "cam_val_subset.npz",
+    }  # fmt: skip
+    expected |= {"gpu_trace.csv"} if DEVICE.type == "cuda" else set()
+    expected |= {"val_preds_certain.npz", "test_preds_certain.npz"} if certain_differs else set()
+    expected |= {"mc_val.npz", "mc_test.npz"} if policy.mc else set()
+    written = {f.name for f in RUN_DIR.iterdir()}
+    assert written == expected, f"unexpected run files: {written ^ expected}"
+    for f in RUN_DIR.glob("*.npz"):
+        with np.load(f) as data:
+            assert not LABEL_KEYS & set(data.files), f"{f.name} contains labels"
+    size_mb = sum(f.stat().st_size for f in RUN_DIR.iterdir()) / 1e6
+    assert size_mb < 25, f"run folder is {size_mb:.1f} MB; it must stay small enough to push"
+
+    write_run_info(
+        "complete",
+        certain_checkpoint_differs=certain_differs,
+        n_val_predictions=len(val_df),
+        n_test_predictions=len(TEST),
+        **costs,
+    )
+    log(f"run complete: {len(written)} files, {size_mb:.2f} MB in {RUN_DIR}")
