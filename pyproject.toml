@@ -2,8 +2,8 @@
 
 [tool.ruff]
 line-length = 100
-# Kaggle's image runs an older Python than the local dev shell; lint against it.
-target-version = "py311"
+# Same Python as Kaggle's image and the nix dev shell.
+target-version = "py313"
 extend-exclude = ["fake_data", "*.ipynb"]
 
 [tool.ruff.lint]

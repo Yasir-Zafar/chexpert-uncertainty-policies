@@ -54,6 +54,9 @@ import platform
 import random
 import re
 import subprocess
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -62,7 +65,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import torchvision
+from torch import nn
+from torch.utils.data import DataLoader, Dataset, Sampler
+from torchvision.transforms import v2 as T
 
 CONFIG = {
     "code_version": "v1",
@@ -73,6 +80,7 @@ CONFIG = {
     "seeds": (42, 43, 44),
     "batch_size": 32,
     "max_epochs": 10,
+    "optimizer": "AdamW",
     "lr": 1e-4,
     "betas": (0.9, 0.999),
     "weight_decay": 1e-5,
@@ -543,3 +551,676 @@ qual_uncertain = (qual_val[PATHOLOGIES] == -1).sum()
 assert (qual_uncertain >= CONFIG["qual_min_uncertain"]).all(), qual_uncertain.to_dict()
 print(f"qualitative list: {len(qual_val)} val + {len(TEST)} test images")
 print("uncertain per pathology in the val subset:", qual_uncertain.to_dict())
+
+# %% [markdown]
+# ## 1.5 Dataset and loaders
+#
+# Images are read as grayscale and resized directly to 320 x 320 (no letterboxing), so a
+# sample is a uint8 tensor of shape (1, 320, 320) with its raw labels in {-1, 0, 1}; each
+# policy decides later what -1 means. Training augmentation runs on the CPU workers: rotation
+# up to 10 degrees, a random resized crop keeping 90-100% of the area, and brightness and
+# contrast jitter of 0.1. There is no horizontal flip (it would move the heart to the right).
+# Conversion to float, the copy to three channels and ImageNet normalisation happen on the
+# GPU (`to_model_input`), which keeps the CPU workers and the host-to-device copy light.
+#
+# The training order comes from `EpochSampler`, a permutation that depends only on the seed
+# and the epoch. Two policies run with the same seed therefore see the same images in the same
+# order with the same augmentation, whoever runs them and whenever.
+
+# %%
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+TRAIN_AUGMENT = T.Compose(
+    [
+        T.RandomRotation(CONFIG["rotation_deg"]),
+        T.RandomResizedCrop(
+            CONFIG["image_size"], scale=CONFIG["crop_scale"], ratio=CONFIG["crop_ratio"]
+        ),
+        T.ColorJitter(brightness=CONFIG["jitter"], contrast=CONFIG["jitter"]),
+    ]
+)
+
+
+def read_image(path: Path, size: int) -> np.ndarray:
+    """Grayscale uint8 image resized directly to ``size`` x ``size``."""
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(path)
+    return cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+
+
+class CheXpertDataset(Dataset):
+    """Frontal images as uint8 (1, S, S) tensors with raw labels in {-1, 0, 1} and row index."""
+
+    def __init__(self, df: pd.DataFrame, augment: bool) -> None:
+        self.paths = [DATA_ROOT / p for p in df["path"]]
+        self.labels = torch.from_numpy(label_matrix(df))
+        self.augment = augment
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+        x = torch.from_numpy(read_image(self.paths[i], CONFIG["image_size"]))[None]
+        if self.augment:
+            x = TRAIN_AUGMENT(x)
+        return x, self.labels[i], i
+
+
+class EpochSampler(Sampler[int]):
+    """Permutation of ``range(n)`` determined by (seed, epoch) alone; call ``set_epoch``."""
+
+    def __init__(self, n: int, seed: int) -> None:
+        self.n, self.seed, self.epoch = n, seed, 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __iter__(self):
+        return iter(np.random.default_rng([self.seed, self.epoch]).permutation(self.n).tolist())
+
+    def __len__(self) -> int:
+        return self.n
+
+
+def seed_worker(worker_id: int) -> None:
+    """Seed NumPy and ``random`` in a loader worker from its torch seed; one OpenCV thread."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)  # noqa: NPY002 - third-party code may draw from the global RNG
+    random.seed(worker_seed)
+    cv2.setNumThreads(0)
+
+
+def make_loader(
+    df: pd.DataFrame, train: bool, seed: int, num_workers: int | None = None
+) -> DataLoader:
+    """Loader over ``df``: seeded order and augmentation for training, fixed order otherwise."""
+    workers = CONFIG["num_workers"] if num_workers is None else num_workers
+    dataset = CheXpertDataset(df, augment=train)
+    return DataLoader(
+        dataset,
+        batch_size=CONFIG["batch_size"],
+        sampler=EpochSampler(len(dataset), seed) if train else None,
+        num_workers=workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=workers > 0,
+        prefetch_factor=4 if workers > 0 else None,
+        worker_init_fn=seed_worker,
+        generator=torch.Generator().manual_seed(seed),
+        # Notebook-defined classes cannot be pickled to spawned or forkserver workers. Fork is the
+        # Linux default up to Python 3.13 but not from 3.14, so ask for it explicitly.
+        multiprocessing_context="fork" if workers > 0 and sys.platform == "linux" else None,
+    )
+
+
+def to_model_input(x: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """uint8 (B, 1, S, S) batch to a normalised float (B, 3, S, S) tensor on ``device``."""
+    x = x.to(device, non_blocking=True).float().div_(255).expand(-1, 3, -1, -1)
+    x = (x - IMAGENET_MEAN.to(device)) / IMAGENET_STD.to(device)
+    if CONFIG["channels_last"]:
+        x = x.contiguous(memory_format=torch.channels_last)
+    return x
+
+
+# Sanity checks on a small slice of the training split.
+probe = TRAIN.iloc[:64]
+x0, y0, i0 = CheXpertDataset(probe, augment=True)[0]
+size = CONFIG["image_size"]
+assert x0.shape == (1, size, size) and x0.dtype == torch.uint8, (x0.shape, x0.dtype)
+assert y0.dtype == torch.int8 and set(y0.tolist()) <= {-1, 0, 1} and i0 == 0
+
+order = list(EpochSampler(1000, SEED))
+assert order == list(EpochSampler(1000, SEED)), "same seed and epoch must give the same order"
+assert sorted(order) == list(range(1000))
+later = EpochSampler(1000, SEED)
+later.set_epoch(1)
+assert list(later) != order, "the order must change between epochs"
+other_seed = next(s for s in CONFIG["seeds"] if s != SEED)
+assert list(EpochSampler(1000, other_seed)) != order, "the order must change with the seed"
+
+
+def first_batch(seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """First augmented batch (images, row ids) of a fresh two-worker loader over ``probe``."""
+    x, _, idx = next(iter(make_loader(probe, train=True, seed=seed, num_workers=2)))
+    return x, idx
+
+
+xa, ia = first_batch(SEED)
+xb, ib = first_batch(SEED)
+assert torch.equal(ia, ib) and torch.equal(xa, xb), "same seed must give identical batches"
+assert not torch.equal(first_batch(other_seed)[0], xa), "another seed must change the batch"
+
+batch = to_model_input(xa, torch.device("cpu"))
+assert batch.shape == (len(xa), 3, size, size) and batch.dtype == torch.float32
+print(f"loader ok: batch {tuple(batch.shape)}, order and augmentation reproducible per seed")
+
+# %% [markdown]
+# # Part 2: Model, policies and metrics
+#
+# ## 2.1 Model
+#
+# DenseNet-121 with ImageNet weights, every layer trainable. The model is split into
+# `extract_features` (the final ReLU feature map, globally average-pooled to 1024 values) and
+# `classify` (optional dropout, then one linear layer with 5 outputs, or 15 for U-MultiClass).
+# The split lets MC Dropout compute the backbone once and repeat only the cheap head.
+#
+# `cam` returns class activation maps: the head weights for the chosen output rows applied to
+# the final 10 x 10 feature map (plus the bias), so the spatial mean of a map equals the logit.
+# The head is initialised from the run seed alone, so it does not depend on how much random
+# state earlier cells used.
+
+# %%
+DENSENET_FEATURES = 1024
+
+
+class DenseNetClassifier(nn.Module):
+    """ImageNet DenseNet-121 backbone, optional dropout and a linear head."""
+
+    def __init__(
+        self, n_outputs: int, dropout_p: float, seed: int, pretrained: bool = True
+    ) -> None:
+        super().__init__()
+        weights = torchvision.models.DenseNet121_Weights.IMAGENET1K_V1 if pretrained else None
+        self.features = torchvision.models.densenet121(weights=weights).features
+        self.dropout = nn.Dropout(dropout_p) if dropout_p > 0 else nn.Identity()
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.head = nn.Linear(DENSENET_FEATURES, n_outputs)
+
+    def feature_map(self, x: torch.Tensor) -> torch.Tensor:
+        """Final ReLU feature map, (B, 1024, h, w); 10 x 10 for a 320 x 320 input."""
+        return F.relu(self.features(x))
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Global-average-pooled backbone features, (B, 1024)."""
+        return self.feature_map(x).mean(dim=(2, 3))
+
+    def classify(self, features: torch.Tensor) -> torch.Tensor:
+        """Logits from pooled features: dropout (if any), then the linear head."""
+        return self.head(self.dropout(features))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.classify(self.extract_features(x))
+
+    @torch.no_grad()
+    def cam(self, x: torch.Tensor, rows: list[int]) -> torch.Tensor:
+        """Class activation maps for head outputs ``rows``, (B, len(rows), h, w)."""
+        fmap = self.feature_map(x)
+        weight, bias = self.head.weight[rows], self.head.bias[rows]
+        return torch.einsum("kc,bchw->bkhw", weight, fmap) + bias.view(1, -1, 1, 1)
+
+
+def count_trainable_params(model: nn.Module) -> int:
+    """Number of trainable parameters."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# Sanity checks without downloading weights (random backbone, one 320 x 320 batch of two).
+probe_x = torch.randn(2, 3, CONFIG["image_size"], CONFIG["image_size"])
+model = DenseNetClassifier(5, dropout_p=0.3, seed=SEED, pretrained=False).eval()
+with torch.no_grad():
+    feats = model.extract_features(probe_x)
+    logits = model(probe_x)
+    assert feats.shape == (2, DENSENET_FEATURES) and logits.shape == (2, 5)
+    assert torch.allclose(logits, model.classify(feats)), "forward != classify(extract_features)"
+    maps = model.cam(probe_x, rows=[0, 3])
+    assert maps.shape == (2, 2, 10, 10), maps.shape
+    assert torch.allclose(maps.mean(dim=(2, 3)), logits[:, [0, 3]], atol=1e-4), "CAM mean != logit"
+    model.train()
+    assert not torch.equal(model.classify(feats), model.classify(feats)), "dropout inactive"
+    model.eval()
+    assert torch.equal(model.classify(feats), model.classify(feats)), "dropout active in eval"
+
+same = DenseNetClassifier(5, dropout_p=0.0, seed=SEED, pretrained=False)
+assert torch.equal(same.head.weight, model.head.weight), "head init must depend only on the seed"
+other = DenseNetClassifier(5, dropout_p=0.0, seed=other_seed, pretrained=False)
+assert not torch.equal(other.head.weight, model.head.weight), "head init must change with seed"
+
+backbone_params = 6_953_856  # torchvision DenseNet-121 without its 1000-class classifier
+for n_out in (5, 15):
+    n = count_trainable_params(DenseNetClassifier(n_out, 0.0, SEED, pretrained=False))
+    assert n == backbone_params + DENSENET_FEATURES * n_out + n_out, (n_out, n)
+print(f"model ok: {count_trainable_params(model):,} trainable parameters with a 5-output head")
+del model, same, other
+
+# %% [markdown]
+# ## 2.2 Policy registry
+#
+# Each policy is one entry: the size of the head, the training loss, how logits become a
+# probability per pathology, and how the raw validation labels are resolved for model
+# selection. Everything else (backbone, data, optimiser, schedule) is shared.
+#
+# | Policy | Uncertain label u in training | Loss | Validation labels |
+# |---|---|---|---|
+# | `u_zeros` | 0 | BCE | u -> 0 |
+# | `u_ones` | 1 | BCE | u -> 1 |
+# | `u_ignore` | left out | masked BCE | u excluded |
+# | `u_multiclass` | third class | 3-way cross-entropy per pathology | u excluded |
+# | `u_ones_lsr` | fresh Uniform(0.55, 0.85) draw each step | BCE with soft targets | u -> 1 |
+# | `u_zeros_mc` | 0, dropout 0.3 before the head | BCE | u -> 0 |
+# | `u_zeros_posw` (extra) | 0, positive-class weights | weighted BCE | u -> 0 |
+#
+# Losses are computed in float32 even under mixed precision. The masked loss averages over the
+# entries that are kept, so a batch whose labels are all uncertain contributes 0, not NaN.
+# U-MultiClass encodes negative, positive and uncertain as classes 0, 1 and 2; its score is
+# softmax P(positive). `certain_labels` (u excluded) is the policy-independent view used for
+# the certain-only validation AUROC that every run logs.
+
+# %%
+N_PATH = len(PATHOLOGIES)
+
+
+def binary_targets(y: torch.Tensor, uncertain_as: float) -> torch.Tensor:
+    """Float targets from raw labels: 1 positive, 0 negative, ``uncertain_as`` for -1."""
+    return torch.where(y == -1, uncertain_as, (y == 1).float())
+
+
+def lsr_targets(y: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    """U-Ones + LSR targets: a fresh Uniform(lo, hi) draw for every uncertain entry."""
+    lo, hi = CONFIG["lsr_range"]
+    draws = torch.empty(y.shape).uniform_(lo, hi, generator=generator).to(y.device)
+    return torch.where(y == -1, draws, (y == 1).float())
+
+
+def multiclass_classes(y: torch.Tensor) -> torch.Tensor:
+    """U-MultiClass class index per entry: negative 0, positive 1, uncertain 2."""
+    return torch.where(y == -1, 2, y).long()
+
+
+def bce(logits: torch.Tensor, targets: torch.Tensor, pos_weight: torch.Tensor | None = None):
+    """Mean binary cross-entropy with logits, in float32."""
+    return F.binary_cross_entropy_with_logits(logits.float(), targets, pos_weight=pos_weight)
+
+
+def masked_bce(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """BCE over certain entries only: summed loss / max(number kept, 1)."""
+    keep = (y != -1).float()
+    per_entry = F.binary_cross_entropy_with_logits(
+        logits.float(), (y == 1).float(), reduction="none"
+    )
+    return (per_entry * keep).sum() / keep.sum().clamp(min=1)
+
+
+def multiclass_ce(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """3-way cross-entropy per pathology on (B, 15) logits, averaged over all entries."""
+    return F.cross_entropy(logits.float().reshape(-1, 3), multiclass_classes(y).reshape(-1))
+
+
+def multiclass_probs(logits: torch.Tensor) -> torch.Tensor:
+    """Softmax over the 3 classes of each pathology, (B, 5, 3)."""
+    return torch.softmax(logits.float().reshape(-1, N_PATH, 3), dim=-1)
+
+
+def multiclass_renormalised(logits: torch.Tensor) -> torch.Tensor:
+    """Alternative U-MultiClass score P(pos) / (P(pos) + P(neg)), (B, 5)."""
+    probs = multiclass_probs(logits)
+    return probs[..., 1] / (probs[..., 0] + probs[..., 1])
+
+
+def resolve(uncertain_as: float):
+    """Validation-label rule mapping raw -1 to ``uncertain_as`` (NaN means excluded)."""
+    return lambda y: np.where(y == -1, uncertain_as, y).astype(np.float64)
+
+
+certain_labels = resolve(np.nan)
+
+# Positive-class weights for the extra experiment: n_neg / n_pos on the training split, u -> 0.
+train_positive = (label_matrix(TRAIN) == 1).sum(axis=0)
+POS_WEIGHT = torch.tensor((len(TRAIN) - train_positive) / train_positive, dtype=torch.float32)
+
+
+@dataclass(frozen=True)
+class Policy:
+    """One uncertainty policy: head size, loss, score and validation-label rule."""
+
+    name: str
+    n_outputs: int
+    loss: Callable[[torch.Tensor, torch.Tensor, torch.Generator], torch.Tensor]
+    score: Callable[[torch.Tensor], torch.Tensor]
+    val_labels: Callable[[np.ndarray], np.ndarray]
+    dropout_p: float = 0.0
+    mc: bool = False
+    extra: bool = False
+
+    @property
+    def cam_rows(self) -> list[int]:
+        """Head rows whose CAMs are shown: the positive class of each pathology."""
+        return (
+            [3 * j + 1 for j in range(N_PATH)] if self.n_outputs == 3 * N_PATH else [*range(N_PATH)]
+        )
+
+
+def sigmoid_score(logits: torch.Tensor) -> torch.Tensor:
+    """Per-pathology probability from (B, 5) logits."""
+    return torch.sigmoid(logits.float())
+
+
+def zeros_loss(logits: torch.Tensor, y: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    """U-Zeros loss (also used by the MC Dropout variant): BCE with u -> 0."""
+    return bce(logits, binary_targets(y, 0.0))
+
+
+POLICIES = {
+    p.name: p
+    for p in [
+        Policy(
+            name="u_zeros",
+            n_outputs=N_PATH,
+            loss=zeros_loss,
+            score=sigmoid_score,
+            val_labels=resolve(0),
+        ),
+        Policy(
+            name="u_ones",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, binary_targets(y, 1.0)),
+            score=sigmoid_score,
+            val_labels=resolve(1),
+        ),
+        Policy(
+            name="u_ignore",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: masked_bce(z, y),
+            score=sigmoid_score,
+            val_labels=certain_labels,
+        ),
+        Policy(
+            name="u_multiclass",
+            n_outputs=3 * N_PATH,
+            loss=lambda z, y, g: multiclass_ce(z, y),
+            score=lambda z: multiclass_probs(z)[..., 1],
+            val_labels=certain_labels,
+        ),
+        Policy(
+            name="u_ones_lsr",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, lsr_targets(y, g)),
+            score=sigmoid_score,
+            val_labels=resolve(1),
+        ),
+        Policy(
+            name="u_zeros_mc",
+            n_outputs=N_PATH,
+            loss=zeros_loss,
+            score=sigmoid_score,
+            val_labels=resolve(0),
+            dropout_p=CONFIG["mc_dropout_p"],
+            mc=True,
+        ),
+        Policy(
+            name="u_zeros_posw",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, binary_targets(y, 0.0), POS_WEIGHT.to(z.device)),
+            score=sigmoid_score,
+            val_labels=resolve(0),
+            extra=True,
+        ),
+    ]
+}
+MAIN_POLICIES = [name for name, p in POLICIES.items() if not p.extra]
+assert POLICY in POLICIES, f"POLICY must be one of {list(POLICIES)}, got {POLICY!r}"
+
+print(f"policy {POLICY!r} selected; positive-class weights {np.round(POS_WEIGHT.numpy(), 2)}")
+
+# Hand-computed checks on a 2 x 5 example; the expected values use NumPy formulas, not torch.
+y_ex = torch.tensor([[1, 0, -1, -1, 1], [0, -1, 1, 0, -1]], dtype=torch.int8)
+z_ex = torch.tensor([[2.0, -1.0, 0.5, -0.5, 0.0], [1.0, 0.3, -2.0, 0.7, -1.5]])
+z_np, y_np = z_ex.numpy().astype(np.float64), y_ex.numpy()
+
+
+def np_bce(z: np.ndarray, t: np.ndarray, w: np.ndarray | float = 1.0) -> np.ndarray:
+    """Per-entry BCE with logits, positive term weighted by ``w`` (NumPy reference)."""
+    log_sig, log_one_minus = -np.logaddexp(0, -z), -np.logaddexp(0, z)
+    return -(w * t * log_sig + (1 - t) * log_one_minus)
+
+
+def check(name: str, expected: float, generator: torch.Generator | None = None, z=z_ex) -> None:
+    """Assert that policy ``name``'s loss on the example equals ``expected``."""
+    got = POLICIES[name].loss(z, y_ex, generator).item()
+    assert abs(got - expected) < 1e-5, f"{name}: loss {got:.6f}, expected {expected:.6f}"
+
+
+positive, negative, uncertain = y_np == 1, y_np == 0, y_np == -1
+check("u_zeros", np_bce(z_np, positive).mean())
+check("u_zeros_mc", np_bce(z_np, positive).mean())
+check("u_ones", np_bce(z_np, ~negative).mean())
+check("u_ignore", np_bce(z_np, positive)[~uncertain].mean())
+pw = POS_WEIGHT.numpy().astype(np.float64)
+check("u_zeros_posw", np_bce(z_np, positive, pw).mean())
+
+lsr_draw = lsr_targets(y_ex, torch.Generator().manual_seed(0)).numpy()
+lo, hi = CONFIG["lsr_range"]
+assert ((lsr_draw[uncertain] >= lo) & (lsr_draw[uncertain] <= hi)).all(), "LSR target out of range"
+assert (lsr_draw[~uncertain] == positive[~uncertain]).all(), "LSR changed a certain label"
+check("u_ones_lsr", np_bce(z_np, lsr_draw).mean(), torch.Generator().manual_seed(0))
+second_draw = lsr_targets(y_ex, torch.Generator().manual_seed(1)).numpy()
+assert not np.allclose(lsr_draw[uncertain], second_draw[uncertain]), "LSR draws must vary"
+
+expected_classes = [[1, 0, 2, 2, 1], [0, 2, 1, 0, 2]]
+assert multiclass_classes(y_ex).tolist() == expected_classes, "U-MultiClass must map -1 to class 2"
+z15 = torch.linspace(-1.5, 1.5, 30).reshape(2, 15)
+z15_np = z15.numpy().astype(np.float64).reshape(2, N_PATH, 3)
+log_softmax = z15_np - np.log(np.exp(z15_np).sum(axis=-1, keepdims=True))
+classes = np.where(uncertain, 2, y_np)
+expected_ce = -np.take_along_axis(log_softmax, classes[..., None], axis=-1).mean()
+check("u_multiclass", expected_ce, z=z15)
+probs = np.exp(log_softmax)
+assert np.allclose(POLICIES["u_multiclass"].score(z15).numpy(), probs[..., 1], atol=1e-6)
+renorm = probs[..., 1] / (probs[..., 0] + probs[..., 1])
+assert np.allclose(multiclass_renormalised(z15).numpy(), renorm, atol=1e-6)
+
+all_uncertain = torch.full((2, N_PATH), -1, dtype=torch.int8)
+z_grad = z_ex.clone().requires_grad_(True)
+loss = POLICIES["u_ignore"].loss(z_grad, all_uncertain, None)
+loss.backward()
+assert loss.item() == 0.0 and torch.isfinite(z_grad.grad).all(), "all-uncertain batch must give 0"
+
+for name, policy in POLICIES.items():
+    logits = (z15 if policy.n_outputs == 3 * N_PATH else z_ex).clone().requires_grad_(True)
+    policy.loss(logits, y_ex, torch.Generator().manual_seed(0)).backward()
+    assert torch.isfinite(logits.grad).all(), f"{name}: non-finite gradient"
+    scores = policy.score(logits.detach())
+    assert scores.shape == (2, N_PATH) and ((scores >= 0) & (scores <= 1)).all(), name
+    assert len(policy.cam_rows) == N_PATH and max(policy.cam_rows) < policy.n_outputs, name
+
+assert np.array_equal(POLICIES["u_zeros"].val_labels(y_np), np.where(uncertain, 0, y_np))
+assert np.array_equal(POLICIES["u_ones_lsr"].val_labels(y_np), np.where(uncertain, 1, y_np))
+assert np.isnan(POLICIES["u_multiclass"].val_labels(y_np)[uncertain]).all()
+assert np.isfinite(POS_WEIGHT.numpy()).all() and (POS_WEIGHT > 0).all(), "bad positive weights"
+assert len(MAIN_POLICIES) == 6
+print(f"policies ok: {', '.join(POLICIES)}")
+
+# %% [markdown]
+# ## 2.3 Metrics
+#
+# All metrics are written in NumPy so the evaluation is fully visible; scikit-learn appears
+# only in the checks at the end of this cell, as an independent reference.
+#
+# - **AUROC** (main metric) from average ranks, so tied scores count one half.
+# - **AUPRC** as average precision over distinct score thresholds.
+# - **F1** at the threshold that maximises Youden's J (TPR - FPR) on internal validation.
+# - **ECE** over 10 equal-width bins of the positive-class probability, and the **Brier** score.
+# - **Predictive entropy** (in nats) of the MC Dropout mean probability.
+#
+# Confidence intervals resample *patients*, not images, because images of one patient are not
+# independent. One set of 1,000 resamples (fixed seed) is drawn per evaluation set and reused
+# for every policy and metric, so differences between policies are paired. The paired p-value
+# for "policy A differs from U-Zeros" is
+# p = min(1, 2 min((1 + #{d <= 0}) / (B + 1), (1 + #{d >= 0}) / (B + 1))) over the B bootstrap
+# differences d, as in the proposal.
+
+# %%
+BOOTSTRAP_SEED = CONFIG["split_seed"]
+
+
+def _sorted_counts(y: np.ndarray, s: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Distinct thresholds (descending) with cumulative true and false positives at each."""
+    order = np.argsort(-s, kind="mergesort")
+    s_sorted, y_sorted = s[order], y[order]
+    last = np.r_[np.flatnonzero(np.diff(s_sorted)), len(s_sorted) - 1]
+    tps = np.cumsum(y_sorted)[last]
+    return s_sorted[last], tps, last + 1 - tps
+
+
+def auroc(y: np.ndarray, s: np.ndarray) -> float:
+    """Area under the ROC curve via average ranks; NaN if only one class is present."""
+    n_pos = int(y.sum())
+    n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return np.nan
+    values, inverse, counts = np.unique(s, return_inverse=True, return_counts=True)
+    mid_ranks = np.cumsum(counts) - (counts - 1) / 2
+    rank_sum = mid_ranks[inverse][y == 1].sum()
+    return float((rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def auprc(y: np.ndarray, s: np.ndarray) -> float:
+    """Average precision over distinct thresholds; NaN if there are no positives."""
+    if y.sum() == 0:
+        return np.nan
+    _, tps, fps = _sorted_counts(y, s)
+    precision, recall = tps / (tps + fps), tps / tps[-1]
+    return float(np.sum(np.diff(recall, prepend=0.0) * precision))
+
+
+def youden_threshold(y: np.ndarray, s: np.ndarray) -> float:
+    """Score threshold maximising TPR - FPR (predict positive when score >= threshold)."""
+    thresholds, tps, fps = _sorted_counts(y, s)
+    j = tps / max(y.sum(), 1) - fps / max(len(y) - y.sum(), 1)
+    return float(thresholds[np.argmax(j)])
+
+
+def f1_at(y: np.ndarray, s: np.ndarray, threshold: float) -> float:
+    """F1 score when predicting positive for score >= threshold (0 if undefined)."""
+    pred = s >= threshold
+    tp = np.sum(pred & (y == 1))
+    denominator = 2 * tp + np.sum(pred & (y == 0)) + np.sum(~pred & (y == 1))
+    return float(2 * tp / denominator) if denominator else 0.0
+
+
+def ece(y: np.ndarray, p: np.ndarray, n_bins: int = CONFIG["ece_bins"]) -> float:
+    """Expected calibration error over equal-width bins (lo, hi] of the probability."""
+    bins = np.digitize(p, np.linspace(0, 1, n_bins + 1)[1:-1], right=True)
+    total = 0.0
+    for b in np.unique(bins):
+        in_bin = bins == b
+        total += in_bin.sum() * abs(y[in_bin].mean() - p[in_bin].mean())
+    return float(total / len(y))
+
+
+def brier(y: np.ndarray, p: np.ndarray) -> float:
+    """Mean squared difference between probability and label."""
+    return float(np.mean((p - y) ** 2))
+
+
+def binary_entropy(p: np.ndarray) -> np.ndarray:
+    """Entropy (nats) of a Bernoulli with probability ``p``, elementwise."""
+    q = np.clip(p, 1e-12, 1 - 1e-12)
+    return -(q * np.log(q) + (1 - q) * np.log(1 - q))
+
+
+def per_pathology(metric: Callable, labels: np.ndarray, scores: np.ndarray) -> np.ndarray:
+    """``metric`` per pathology column, skipping entries whose label is NaN (excluded)."""
+    results = []
+    for j in range(labels.shape[1]):
+        keep = ~np.isnan(labels[:, j])
+        results.append(metric(labels[keep, j], scores[keep, j]))
+    return np.array(results)
+
+
+def bootstrap_indices(patient_ids: np.ndarray, n_resamples: int, seed: int) -> list[np.ndarray]:
+    """Row indices of ``n_resamples`` patient-level bootstrap resamples (whole patients)."""
+    _, group, counts = np.unique(patient_ids, return_inverse=True, return_counts=True)
+    order = np.argsort(group, kind="mergesort")
+    starts = np.cumsum(counts) - counts
+    rng = np.random.default_rng(seed)
+    resamples = []
+    for _ in range(n_resamples):
+        chosen = rng.integers(0, len(counts), len(counts))
+        sizes = counts[chosen]
+        offsets = np.repeat(starts[chosen] - (np.cumsum(sizes) - sizes), sizes)
+        resamples.append(order[offsets + np.arange(sizes.sum())])
+    return resamples
+
+
+def bootstrap_ci(statistic: Callable[[np.ndarray], float], resamples: list[np.ndarray], n: int):
+    """Point estimate on all ``n`` rows and 95% percentile interval over the resamples."""
+    values = np.array([statistic(idx) for idx in resamples])
+    lo, hi = np.nanpercentile(values, [2.5, 97.5])
+    return statistic(np.arange(n)), float(lo), float(hi)
+
+
+def paired_difference(
+    stat_a: Callable[[np.ndarray], float],
+    stat_b: Callable[[np.ndarray], float],
+    resamples: list[np.ndarray],
+    n: int,
+) -> dict:
+    """Difference A - B with 95% CI and two-sided paired bootstrap p-value."""
+    d = np.array([stat_a(idx) - stat_b(idx) for idx in resamples])
+    d = d[np.isfinite(d)]
+    b = len(d)
+    p = min(1.0, 2 * min((1 + np.sum(d <= 0)) / (b + 1), (1 + np.sum(d >= 0)) / (b + 1)))
+    lo, hi = np.percentile(d, [2.5, 97.5])
+    full = np.arange(n)
+    return {"diff": stat_a(full) - stat_b(full), "lo": float(lo), "hi": float(hi), "p": p}
+
+
+# Checks: hand-worked values, then agreement with scikit-learn on random data with ties.
+assert auroc(np.array([0, 0, 1, 1]), np.array([0.1, 0.4, 0.35, 0.8])) == 0.75
+assert auroc(np.array([0, 1]), np.array([0.5, 0.5])) == 0.5, "a tie must count one half"
+assert np.isnan(auroc(np.array([1, 1]), np.array([0.2, 0.3])))
+
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    f1_score,
+    roc_auc_score,
+    roc_curve,
+)
+
+check_rng = np.random.default_rng(0)
+for _ in range(20):
+    y_r = check_rng.integers(0, 2, 300)
+    s_r = np.round(check_rng.random(300) * 0.6 + 0.4 * y_r, 2)  # rounding creates ties
+    assert abs(auroc(y_r, s_r) - roc_auc_score(y_r, s_r)) < 1e-12
+    assert abs(auprc(y_r, s_r) - average_precision_score(y_r, s_r)) < 1e-12
+    assert abs(brier(y_r, s_r) - brier_score_loss(y_r, s_r)) < 1e-12
+    fpr, tpr, thr = roc_curve(y_r, s_r)
+    assert youden_threshold(y_r, s_r) == thr[np.argmax(tpr - fpr)]
+    t = youden_threshold(y_r, s_r)
+    assert abs(f1_at(y_r, s_r, t) - f1_score(y_r, s_r >= t)) < 1e-12
+
+# Perfect calibration: in every bin the positive rate equals the (constant) probability.
+p_cal = np.repeat(np.arange(0.05, 1, 0.1), 20)
+y_cal = np.concatenate([np.r_[np.ones(k), np.zeros(20 - k)] for k in range(1, 20, 2)])
+assert ece(y_cal, p_cal) < 1e-12, "ECE must be 0 for perfectly calibrated predictions"
+assert abs(ece(np.r_[np.ones(5), np.zeros(5)], np.ones(10)) - 0.5) < 1e-12
+# A probability on a bin edge belongs to the lower bin: 0.1 is in (0, 0.1], not (0.1, 0.2].
+edge_ece = ece(np.array([0, 0, 1, 1]), np.array([0.1, 0.1, 0.15, 0.15]))
+assert abs(edge_ece - 0.475) < 1e-12, edge_ece
+assert abs(binary_entropy(np.array([0.5]))[0] - np.log(2)) < 1e-9
+assert binary_entropy(np.array([0.0, 1.0])).max() < 1e-9
+
+pids = np.array(["a", "b", "b", "c", "c", "c"])
+for idx in bootstrap_indices(pids, 50, BOOTSTRAP_SEED):
+    picked = pd.Series(pids[idx]).value_counts()
+    size = pd.Series(pids).value_counts()
+    assert all(picked[p] % size[p] == 0 for p in picked.index), "a patient was split"
+first = bootstrap_indices(pids, 5, BOOTSTRAP_SEED)
+again = bootstrap_indices(pids, 5, BOOTSTRAP_SEED)
+assert all(np.array_equal(a, b) for a, b in zip(first, again, strict=True)), "not reproducible"
+
+y_r = check_rng.integers(0, 2, 200)
+s_r = check_rng.random(200) + 0.3 * y_r
+groups = np.repeat(np.arange(100), 2)
+boot = bootstrap_indices(groups, 200, BOOTSTRAP_SEED)
+same = paired_difference(
+    lambda i: auroc(y_r[i], s_r[i]), lambda i: auroc(y_r[i], s_r[i]), boot, 200
+)
+assert same == {"diff": 0.0, "lo": 0.0, "hi": 0.0, "p": 1.0}, same
+always_better = paired_difference(lambda i: 1.0, lambda i: 0.0, boot, 200)
+assert always_better["p"] == 2 / (len(boot) + 1), "p-value must be two-sided"
+point, lo, hi = bootstrap_ci(lambda i: auroc(y_r[i], s_r[i]), boot, 200)
+assert lo < point < hi
+print(f"metrics ok: AUROC {point:.3f} (95% CI {lo:.3f}-{hi:.3f}) on a random check set")
