@@ -31,3 +31,7 @@ kaggle.json
 # direnv / nix
 .direnv/
 result
+
+# Training outputs that stay local
+runs_smoke/
+checkpoints/

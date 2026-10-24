@@ -50,6 +50,7 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 # %%
 import base64
 import hashlib
+import json
 import math
 import platform
 import random
@@ -114,6 +115,17 @@ PATHOLOGIES = CONFIG["pathologies"]
 assert MODE in ("train", "results"), f"MODE must be 'train' or 'results', got {MODE!r}"
 assert SEED in CONFIG["seeds"], f"SEED must be one of {CONFIG['seeds']}, got {SEED}"
 assert N_SEEDS in ("1", "2", "3", "auto"), f"N_SEEDS must be 1, 2, 3 or auto, got {N_SEEDS!r}"
+
+# A smoke pass (SMOKE=1) checks that a run works end to end in minutes: a data subset, two
+# epochs and a short monitoring interval. Its results go to runs_smoke/ and are never used.
+# The environment variables only matter for local CPU checks; on Kaggle the defaults apply.
+RUN_LIMITS = {
+    "train_images": int(os.environ.get("SMOKE_TRAIN", 2000)) if SMOKE else None,
+    "val_images": int(os.environ.get("SMOKE_VAL", 500)) if SMOKE else None,
+    "max_epochs": int(os.environ.get("SMOKE_EPOCHS", 2)) if SMOKE else CONFIG["max_epochs"],
+    "batch_size": int(os.environ.get("SMOKE_BATCH", 32)) if SMOKE else CONFIG["batch_size"],
+    "grad_stats_every": 5 if SMOKE else CONFIG["grad_stats_every"],
+}
 
 
 def seed_everything(seed: int) -> None:
@@ -643,7 +655,7 @@ def make_loader(
     dataset = CheXpertDataset(df, augment=train)
     return DataLoader(
         dataset,
-        batch_size=CONFIG["batch_size"],
+        batch_size=RUN_LIMITS["batch_size"],
         sampler=EpochSampler(len(dataset), seed) if train else None,
         num_workers=workers,
         pin_memory=torch.cuda.is_available(),
@@ -1348,7 +1360,7 @@ def train_one_epoch(
         loss = policy.loss(logits, y, generator)  # float32 inside every policy loss
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
-        if step % CONFIG["grad_stats_every"] == 0:
+        if step % RUN_LIMITS["grad_stats_every"] == 0:
             scaler.unscale_(optimizer)
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), math.inf)  # measure only
             grad_log.append(
@@ -1399,7 +1411,7 @@ def validation_aurocs(policy: Policy, y_raw: np.ndarray, scores: np.ndarray) -> 
     """Mean validation AUROC with policy-resolved labels, and with certain labels only."""
     resolved = per_pathology(auroc, policy.val_labels(y_raw), scores)
     certain = per_pathology(auroc, certain_labels(y_raw), scores)
-    return float(np.mean(resolved)), float(np.mean(certain))
+    return float(np.nanmean(resolved)), float(np.nanmean(certain))
 
 
 def fit(
@@ -1437,6 +1449,8 @@ def fit(
         )
         scores = scores_from_logits(policy, predict_logits(model, val_loader))
         val_auroc, val_certain = validation_aurocs(policy, y_val, scores)
+        if not (math.isfinite(val_auroc) and math.isfinite(val_certain)):
+            raise TrainingFailure(f"validation AUROC is undefined in epoch {epoch}")
         lr = optimizer.param_groups[0]["lr"]
         scheduler.step(val_auroc)
         peak_gb = torch.cuda.max_memory_allocated() / 1e9 if DEVICE.type == "cuda" else 0.0
@@ -1455,10 +1469,15 @@ def fit(
             run_dir / "grad_stats.csv", index=False
         )
         improved = val_auroc > best["best.pt"][0]
-        for name, value in [("best.pt", val_auroc), ("best_certain.pt", val_certain)]:
-            if value > best[name][0]:
-                best[name] = (value, epoch)
-                torch.save(model.state_dict(), ckpt_dir / name)
+        if improved:
+            best["best.pt"] = (val_auroc, epoch)
+            torch.save(model.state_dict(), ckpt_dir / "best.pt")
+        if val_certain > best["best_certain.pt"][0]:
+            best["best_certain.pt"] = (val_certain, epoch)
+            if improved:  # same epoch: one file, copied, so the two are identical by construction
+                shutil.copyfile(ckpt_dir / "best.pt", ckpt_dir / "best_certain.pt")
+            else:
+                torch.save(model.state_dict(), ckpt_dir / "best_certain.pt")
         stale = 0 if improved else stale + 1
         log(
             f"epoch {epoch} done: val AUROC {val_auroc:.4f} (certain-only {val_certain:.4f}), "
@@ -1500,3 +1519,115 @@ for name, policy in POLICIES.items():
         losses.append(step_loss.item())
     assert losses[-1] < losses[0], f"{name}: loss did not fall on a repeated batch: {losses}"
 print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for every policy")
+
+# %% [markdown]
+# ## 3.2 Run it
+#
+# Trains the selected `POLICY` at `SEED` and writes everything a run produces into
+# `runs/<policy>_s<seed>/` (`runs_smoke/` for a smoke pass): the per-epoch metrics, gradient
+# statistics, the GPU trace, the training log and `run_info.json`. `run_info.json` records the
+# policy, seed, code version, the full `CONFIG`, the split and data fingerprints, the hardware
+# and the outcome, and its `status` moves from `running` to `trained` (and to `complete` once
+# the predictions are written in section 3.3) or `failed` with the reason. A run that dies
+# mid-way therefore never looks finished.
+#
+# Checkpoints go to `checkpoints/`, which is never pushed.
+
+# %%
+RUN_NAME = f"{POLICY}_s{SEED}"
+RUN_DIR = REPO_DIR / ("runs_smoke" if SMOKE else "runs") / RUN_NAME
+CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
+
+
+def environment_info() -> dict:
+    """Hardware and library versions recorded with every run."""
+    on_gpu = DEVICE.type == "cuda"
+    return {
+        "gpu_name": torch.cuda.get_device_name() if on_gpu else "cpu",
+        "gpu_count": torch.cuda.device_count(),
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "python": platform.python_version(),
+    }
+
+
+def write_run_info(status: str, **extra) -> dict:
+    """Create or update ``run_info.json`` with a new status and fields; return the record."""
+    path = RUN_DIR / "run_info.json"
+    if path.exists():
+        info = json.loads(path.read_text())
+    else:
+        info = {
+            "policy": POLICY,
+            "seed": SEED,
+            "code_version": CONFIG["code_version"],
+            "smoke": SMOKE,
+            "config": CONFIG,
+            "run_limits": RUN_LIMITS,
+            "split_sha256": SPLIT_SHA256,
+            "data_fingerprint": DATA_FINGERPRINT,
+            "run_by": RUN_BY,
+            **environment_info(),
+        }
+    info.update(status=status, **extra)
+    path.write_text(json.dumps(info, indent=2))
+    return info
+
+
+if MODE == "train":
+    if RUN_DIR.exists() and any(RUN_DIR.iterdir()):
+        raise FileExistsError(f"{RUN_DIR} is not empty; remove it to start this run again")
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    CKPT_DIR.mkdir(parents=True, exist_ok=True)
+
+    policy = POLICIES[POLICY]
+    train_df, val_df = TRAIN, VAL
+    if SMOKE:
+        n_train = min(RUN_LIMITS["train_images"], len(TRAIN))
+        n_val = min(RUN_LIMITS["val_images"], len(VAL))
+        train_df = TRAIN.sample(n=n_train, random_state=CONFIG["split_seed"], ignore_index=True)
+        val_df = VAL.sample(n=n_val, random_state=CONFIG["split_seed"], ignore_index=True)
+
+    log = make_logger(RUN_DIR / "train.log")
+    log(f"run {RUN_NAME} by {RUN_BY} on {DEVICE} ({'smoke' if SMOKE else 'full'} run)")
+    log(f"{len(train_df):,} training and {len(val_df):,} validation images")
+    log(f"split {SPLIT_SHA256[:12]}, data {DATA_FINGERPRINT[:12]}")
+    write_run_info(
+        "running",
+        started=time.strftime("%Y-%m-%d %H:%M:%S"),
+        n_train_images=len(train_df),
+        n_val_images=len(val_df),
+    )
+    try:
+        with GpuTrace(RUN_DIR / "gpu_trace.csv"):
+            model, summary = fit(
+                policy,
+                train_df,
+                val_df,
+                SEED,
+                RUN_LIMITS["max_epochs"],
+                RUN_DIR,
+                CKPT_DIR,
+                log,
+            )
+    except Exception as err:
+        log(f"FAILED: {err!r}")
+        write_run_info("failed", failure=repr(err))
+        raise
+    info = write_run_info("trained", trainable_params=count_trainable_params(model), **summary)
+    log(f"trained: best epoch {info['best_epoch']} of {info['epochs_run']} ({info['stop_reason']})")
+
+    # Checks on what the run wrote.
+    metrics = pd.read_csv(RUN_DIR / "metrics_epoch.csv")
+    assert len(metrics) == info["epochs_run"] and not metrics.isna().any().any(), "bad epoch log"
+    steps = math.ceil(len(train_df) / RUN_LIMITS["batch_size"])
+    expected_rows = info["epochs_run"] * (steps // RUN_LIMITS["grad_stats_every"])
+    n_grad_rows = len(pd.read_csv(RUN_DIR / "grad_stats.csv"))
+    assert n_grad_rows == expected_rows, (
+        f"grad_stats has {n_grad_rows} rows, expected {expected_rows}"
+    )
+    if info["best_epoch"] == info["best_certain_epoch"]:
+        assert sha256_file(CKPT_DIR / "best.pt") == sha256_file(CKPT_DIR / "best_certain.pt")
+    if DEVICE.type == "cuda":
+        assert len(pd.read_csv(RUN_DIR / "gpu_trace.csv")) >= 1, "GPU trace is empty"
+    print(metrics.to_string(index=False, float_format="%.4f"))
