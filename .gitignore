@@ -27,3 +27,7 @@ kaggle.json
 .vscode/
 .idea/
 .DS_Store
+
+# direnv / nix
+.direnv/
+result
