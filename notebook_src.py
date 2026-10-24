@@ -642,8 +642,8 @@ def make_loader(
         prefetch_factor=4 if workers > 0 else None,
         worker_init_fn=seed_worker,
         generator=torch.Generator().manual_seed(seed),
-        # Notebook-defined classes cannot be pickled to spawned workers; fork is Kaggle's default
-        # but not Python 3.14's, so ask for it explicitly.
+        # Notebook-defined classes cannot be pickled to spawned or forkserver workers. Fork is the
+        # Linux default up to Python 3.13 but not from 3.14, so ask for it explicitly.
         multiprocessing_context="fork" if workers > 0 and sys.platform == "linux" else None,
     )
 
