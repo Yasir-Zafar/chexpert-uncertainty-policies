@@ -1,0 +1,23 @@
+# Tool configuration only; this repo is not a Python package.
+
+[tool.ruff]
+line-length = 100
+# Kaggle's image runs an older Python than the local dev shell; lint against it.
+target-version = "py311"
+extend-exclude = ["fake_data", "*.ipynb"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "SIM",      # simplify
+    "NPY",      # numpy
+    "D103",     # every public function has a docstring
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells: imports live in the setup cell, not at the top of the file.
+"notebook_src.py" = ["E402"]

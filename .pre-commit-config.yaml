@@ -1,0 +1,24 @@
+# Local hooks only: ruff comes from the nix dev shell (downloaded ruff wheels do not run on NixOS).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check --force-exclude
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format --check --force-exclude
+        language: system
+        types: [python]
+      - id: no-github-tokens
+        name: block GitHub tokens
+        # Real tokens only: a prefix followed by a long token body, so docs that name the prefix pass.
+        entry: '(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,})'
+        language: pygrep
+      - id: no-kaggle-credentials
+        name: block kaggle.json
+        entry: kaggle.json holds Kaggle API credentials and must not be committed
+        language: fail
+        files: (^|/)kaggle\.json$
