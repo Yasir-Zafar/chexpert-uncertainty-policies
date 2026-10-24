@@ -122,6 +122,7 @@ assert N_SEEDS in ("1", "2", "3", "auto"), f"N_SEEDS must be 1, 2, 3 or auto, go
 RUN_LIMITS = {
     "train_images": int(os.environ.get("SMOKE_TRAIN", 2000)) if SMOKE else None,
     "val_images": int(os.environ.get("SMOKE_VAL", 500)) if SMOKE else None,
+    "qual_images": int(os.environ.get("SMOKE_QUAL", 600)) if SMOKE else None,
     "max_epochs": int(os.environ.get("SMOKE_EPOCHS", 2)) if SMOKE else CONFIG["max_epochs"],
     "batch_size": int(os.environ.get("SMOKE_BATCH", 32)) if SMOKE else CONFIG["batch_size"],
     "grad_stats_every": 5 if SMOKE else CONFIG["grad_stats_every"],
@@ -1631,3 +1632,256 @@ if MODE == "train":
     if DEVICE.type == "cuda":
         assert len(pd.read_csv(RUN_DIR / "gpu_trace.csv")) >= 1, "GPU trace is empty"
     print(metrics.to_string(index=False, float_format="%.4f"))
+
+# %% [markdown]
+# ## 3.3 Predictions and run artifacts
+#
+# After training, the model (restored to `best.pt`) predicts the internal-validation images and
+# the test images, and the run folder is completed:
+#
+# - `val_preds.npz`, `test_preds.npz`: image path (the row id), logits and scores. **They contain
+#   no CheXpert labels**: the repository is public and the dataset licence forbids sharing the
+#   data, so results mode joins the labels back from the CSVs by path.
+# - `val_preds_certain.npz`, `test_preds_certain.npz`: the same for `best_certain.pt`, written
+#   only when that checkpoint comes from a different epoch.
+# - `mc_val.npz`, `mc_test.npz` (MC Dropout policy only): the mean of 20 stochastic passes,
+#   its predictive entropy and the dropout-off score. `val_preds.npz` of that run is the
+#   dropout-off prediction, so both versions are available to the results tables. The backbone
+#   runs once; dropout and the linear head are applied 20 times to the cached 1024-d features,
+#   which is exactly 20 full passes because the backbone is deterministic at inference.
+# - `cam_test.npz`, `cam_val_subset.npz`: class activation maps (10 x 10) for every test image
+#   and the fixed qualitative validation images.
+# - Cost measurements in `run_info.json`: inference time per image, GFLOPs per image and, for
+#   the MC policy, the time of the 20 head passes per image.
+#
+# Finally the status becomes `complete`; a run without it is ignored by results mode.
+
+# %%
+LABEL_KEYS = {"label", "labels", "y", "y_raw", "y_true"}
+
+
+def save_npz(file: Path, /, **arrays: np.ndarray) -> None:
+    """Write arrays to a compressed .npz; refuses names that suggest CheXpert labels."""
+    assert not LABEL_KEYS & set(arrays), f"{file.name}: labels must not be saved in run files"
+    np.savez_compressed(file, **arrays)
+
+
+def load_checkpoint(model: nn.Module, name: str) -> None:
+    """Load ``checkpoints/<run>/<name>`` into ``model``."""
+    model.load_state_dict(torch.load(CKPT_DIR / name, map_location=DEVICE, weights_only=True))
+
+
+def predict_df(model: nn.Module, df: pd.DataFrame) -> np.ndarray:
+    """Logits for every row of ``df``, in row order."""
+    return predict_logits(model, make_loader(df, train=False, seed=SEED))
+
+
+def write_predictions(
+    policy: Policy, split: str, df: pd.DataFrame, logits: np.ndarray, suffix: str = ""
+) -> np.ndarray:
+    """Save path, logits and scores (never labels) as ``<split>_preds<suffix>.npz``."""
+    scores = scores_from_logits(policy, logits)
+    save_npz(
+        RUN_DIR / f"{split}_preds{suffix}.npz",
+        path=df["path"].to_numpy(),
+        logits=logits,
+        scores=scores,
+    )
+    return scores
+
+
+@torch.no_grad()
+def extract_features_df(model: DenseNetClassifier, df: pd.DataFrame) -> torch.Tensor:
+    """Pooled 1024-d backbone features for every row of ``df``, (N, 1024) on ``DEVICE``."""
+    model.eval()
+    outputs = []
+    for x, _, _ in make_loader(df, train=False, seed=SEED):
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            outputs.append(model.extract_features(to_model_input(x, DEVICE)).float())
+    return torch.cat(outputs)
+
+
+@torch.no_grad()
+def mc_probabilities(
+    model: DenseNetClassifier,
+    features: torch.Tensor,
+    score: Callable[[torch.Tensor], torch.Tensor],
+    passes: int,
+    seed: int,
+) -> torch.Tensor:
+    """(passes, N, 5) probabilities: dropout and head applied ``passes`` times to ``features``.
+
+    Only the dropout layer is stochastic; the generator is seeded so the masks repeat.
+    """
+    model.eval()
+    model.dropout.train()
+    devices = [features.device.index or 0] if features.device.type == "cuda" else []
+    try:
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(seed)
+            return torch.stack([score(model.classify(features)) for _ in range(passes)])
+    finally:
+        model.eval()
+
+
+def mc_arrays(
+    model: DenseNetClassifier, policy: Policy, df: pd.DataFrame, deterministic: np.ndarray
+) -> dict[str, np.ndarray]:
+    """MC Dropout outputs for ``df``: mean probability, predictive entropy, dropout-off score."""
+    features = extract_features_df(model, df)
+    probs = mc_probabilities(model, features, policy.score, CONFIG["mc_passes"], SEED)
+    mean = probs.mean(dim=0).cpu().numpy()
+    return {
+        "path": df["path"].to_numpy(),
+        "mean": mean,
+        "entropy": binary_entropy(mean.astype(np.float64)).astype(np.float32),
+        "deterministic": deterministic,
+    }
+
+
+def mc_equivalence_gap(model: DenseNetClassifier, policy: Policy, x: torch.Tensor) -> float:
+    """Largest difference between cached-feature MC and a naive loop of full passes on ``x``."""
+    passes = CONFIG["mc_passes"]
+    cached = mc_probabilities(model, model.extract_features(x), policy.score, passes, SEED)
+    model.eval()
+    model.dropout.train()
+    devices = [x.device.index or 0] if x.device.type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=devices):
+        torch.manual_seed(SEED)
+        naive = torch.stack([policy.score(model(x)) for _ in range(passes)])
+    model.eval()
+    return (cached - naive).abs().max().item()
+
+
+def compute_cams(model: DenseNetClassifier, df: pd.DataFrame, rows: list[int]) -> np.ndarray:
+    """Class activation maps for head ``rows``, (N, len(rows), 10, 10), in float32."""
+    model.eval()
+    maps = []
+    for x, _, _ in make_loader(df, train=False, seed=SEED):
+        maps.append(model.cam(to_model_input(x, DEVICE), rows).float().cpu())
+    return torch.cat(maps).numpy()
+
+
+def random_batch(batch_size: int) -> torch.Tensor:
+    """A model-ready batch of random images, for timing and FLOP counting."""
+    size = CONFIG["image_size"]
+    raw = torch.randint(0, 256, (batch_size, 1, size, size), dtype=torch.uint8)
+    return to_model_input(raw, DEVICE)
+
+
+@torch.no_grad()
+def time_per_image(fn: Callable[[], object], batch_size: int, warmup: int, timed: int) -> float:
+    """Milliseconds per image for ``fn`` (one batch), after warm-up, with GPU synchronisation."""
+    sync = torch.cuda.synchronize if DEVICE.type == "cuda" else (lambda: None)
+    for _ in range(warmup):
+        fn()
+    sync()
+    start = time.perf_counter()
+    for _ in range(timed):
+        fn()
+    sync()
+    return (time.perf_counter() - start) / (timed * batch_size) * 1000
+
+
+@torch.no_grad()
+def gflops_per_image(model: nn.Module) -> float:
+    """GFLOPs (multiply-adds counted as two) of one forward pass on a single image."""
+    from torch.utils.flop_counter import FlopCounterMode
+
+    model.eval()
+    with FlopCounterMode(display=False) as counter:
+        model(random_batch(1))
+    return counter.get_total_flops() / 1e9
+
+
+if MODE == "train":
+    ids_val, ids_test = val_df["path"].to_numpy(), TEST["path"].to_numpy()
+    model.eval()
+
+    # Primary checkpoint (best.pt): validation and test predictions.
+    val_logits, test_logits = predict_df(model, val_df), predict_df(model, TEST)
+    val_scores = write_predictions(policy, "val", val_df, val_logits)
+    test_scores = write_predictions(policy, "test", TEST, test_logits)
+    recomputed = validation_aurocs(policy, label_matrix(val_df), val_scores)[0]
+    logged = float(metrics.loc[metrics["epoch"] == info["best_epoch"], "val_auroc"].iloc[0])
+    assert abs(recomputed - logged) < 1e-3, f"saved predictions give {recomputed}, log {logged}"
+    log(f"predictions written; validation AUROC {recomputed:.4f} matches the epoch log")
+
+    # Second checkpoint (best_certain.pt): its own files only when it is a different epoch.
+    certain_differs = info["best_certain_epoch"] != info["best_epoch"]
+    load_checkpoint(model, "best_certain.pt")
+    if certain_differs:
+        write_predictions(policy, "val", val_df, predict_df(model, val_df), "_certain")
+        write_predictions(policy, "test", TEST, predict_df(model, TEST), "_certain")
+    else:
+        same = predict_df(model, TEST)
+        assert np.allclose(same, test_logits, atol=1e-3), "best_certain.pt should equal best.pt"
+    load_checkpoint(model, "best.pt")
+
+    # MC Dropout: cached-feature passes must equal a naive loop of full passes.
+    if policy.mc:
+        probe = next(iter(make_loader(val_df.head(4), train=False, seed=SEED, num_workers=0)))
+        gap = mc_equivalence_gap(model, policy, to_model_input(probe[0], DEVICE))
+        assert gap < 1e-5, f"cached MC differs from {CONFIG['mc_passes']} full passes by {gap:.2e}"
+        mc_val = mc_arrays(model, policy, val_df, val_scores)
+        mc_test = mc_arrays(model, policy, TEST, test_scores)
+        for name, arrays in [("val", mc_val), ("test", mc_test)]:
+            save_npz(RUN_DIR / f"mc_{name}.npz", **arrays)
+            assert ((arrays["mean"] >= 0) & (arrays["mean"] <= 1)).all()
+            assert arrays["entropy"].min() >= 0 and arrays["entropy"].max() <= np.log(2) + 1e-6
+        assert not np.allclose(mc_val["mean"], mc_val["deterministic"]), "dropout had no effect"
+        log(f"MC Dropout outputs written (cached vs naive passes differ by {gap:.1e})")
+
+    # Class activation maps: every test image and the fixed qualitative validation images.
+    cam_val_df = qual_val.head(RUN_LIMITS["qual_images"]) if SMOKE else qual_val
+    for name, frame in [("test", TEST), ("val_subset", cam_val_df)]:
+        maps = compute_cams(model, frame, policy.cam_rows)
+        assert maps.shape == (len(frame), N_PATH, 10, 10) and np.isfinite(maps).all()
+        save_npz(RUN_DIR / f"cam_{name}.npz", path=frame["path"].to_numpy(), cam=maps)
+
+    # Cost: inference time on a model-ready random batch, FLOPs and the MC head cost.
+    batch = RUN_LIMITS["batch_size"]
+    warmup, timed = (3, 20) if DEVICE.type == "cuda" else (1, 2)
+    x_time = random_batch(batch)
+    with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+        ms_per_image = time_per_image(lambda: model(x_time), batch, warmup, timed)
+    costs = {
+        "inference_ms_per_image": ms_per_image,
+        "inference_batch_size": batch,
+        "gflops_per_image": gflops_per_image(model),
+    }
+    assert costs["gflops_per_image"] > 0 and costs["inference_ms_per_image"] > 0
+    if policy.mc:
+        feats = model.extract_features(x_time).detach()
+        costs["mc_head_ms_per_image"] = time_per_image(
+            lambda: mc_probabilities(model, feats, policy.score, CONFIG["mc_passes"], SEED),
+            batch,
+            warmup,
+            timed,
+        )
+    log(f"inference {ms_per_image:.2f} ms/image, {costs['gflops_per_image']:.1f} GFLOPs/image")
+
+    # Final check of the run folder: expected files only, small enough to push, no labels.
+    expected = {
+        "run_info.json", "metrics_epoch.csv", "grad_stats.csv", "train.log",
+        "val_preds.npz", "test_preds.npz", "cam_test.npz", "cam_val_subset.npz",
+    }  # fmt: skip
+    expected |= {"gpu_trace.csv"} if DEVICE.type == "cuda" else set()
+    expected |= {"val_preds_certain.npz", "test_preds_certain.npz"} if certain_differs else set()
+    expected |= {"mc_val.npz", "mc_test.npz"} if policy.mc else set()
+    written = {f.name for f in RUN_DIR.iterdir()}
+    assert written == expected, f"unexpected run files: {written ^ expected}"
+    for f in RUN_DIR.glob("*.npz"):
+        with np.load(f) as data:
+            assert not LABEL_KEYS & set(data.files), f"{f.name} contains labels"
+    size_mb = sum(f.stat().st_size for f in RUN_DIR.iterdir()) / 1e6
+    assert size_mb < 25, f"run folder is {size_mb:.1f} MB; it must stay small enough to push"
+
+    write_run_info(
+        "complete",
+        certain_checkpoint_differs=certain_differs,
+        n_val_predictions=len(val_df),
+        n_test_predictions=len(TEST),
+        **costs,
+    )
+    log(f"run complete: {len(written)} files, {size_mb:.2f} MB in {RUN_DIR}")

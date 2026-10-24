@@ -66,7 +66,7 @@ smoke: fake
 	rm -rf fake_data/repo/runs_smoke fake_data/repo/checkpoints
 	for p in $(POLICY_NAMES); do \
 		echo "smoke $$p"; \
-		$(FAKE_ENV) SMOKE=1 SMOKE_TRAIN=64 SMOKE_VAL=48 SMOKE_BATCH=8 MODE=train POLICY=$$p \
+		$(FAKE_ENV) SMOKE=1 SMOKE_TRAIN=64 SMOKE_VAL=48 SMOKE_QUAL=16 SMOKE_BATCH=8 MODE=train POLICY=$$p \
 			$(PY) notebook_src.py > fake_data/smoke_$$p.log 2>&1 \
 			|| { tail -25 fake_data/smoke_$$p.log; exit 1; }; \
 	done
