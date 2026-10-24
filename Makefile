@@ -41,7 +41,7 @@ FAKE_ENV := DATA_ROOT=$(FAKE_ROOT) REPO_DIR=fake_data/repo MPLBACKEND=Agg
 .PHONY: prep
 
 prep: fake
-	$(FAKE_ENV) MODE=train $(PY) notebook_src.py
+	$(FAKE_ENV) MODE=results $(PY) notebook_src.py
 
 .PHONY: check
 
@@ -49,9 +49,25 @@ prep: fake
 # unchanged (byte-identical), proving they are created once and only read afterwards.
 check: lint hooktest fake
 	rm -rf fake_data/repo
-	$(FAKE_ENV) MODE=train $(PY) notebook_src.py > /dev/null
+	$(FAKE_ENV) MODE=results $(PY) notebook_src.py > /dev/null
 	sha256sum fake_data/repo/splits/split_seed42.csv fake_data/repo/qual/qual_ids.csv > fake_data/created.sha
 	$(FAKE_ENV) MODE=results $(PY) notebook_src.py > fake_data/rerun.log
 	! grep -E "^(created|warning)" fake_data/rerun.log
 	sha256sum --check --quiet fake_data/created.sha
 	@echo "check ok"
+
+POLICY_NAMES := u_zeros u_ones u_ignore u_multiclass u_ones_lsr u_zeros_mc u_zeros_posw
+
+.PHONY: smoke
+
+# One smoke run per policy on the fake data, each in its own process. The tiny subset and batch
+# keep CPU memory and time small; a real smoke pass on Kaggle uses the notebook's defaults.
+smoke: fake
+	rm -rf fake_data/repo/runs_smoke fake_data/repo/checkpoints
+	for p in $(POLICY_NAMES); do \
+		echo "smoke $$p"; \
+		$(FAKE_ENV) SMOKE=1 SMOKE_TRAIN=64 SMOKE_VAL=48 SMOKE_QUAL=16 SMOKE_BATCH=8 MODE=train POLICY=$$p \
+			$(PY) notebook_src.py > fake_data/smoke_$$p.log 2>&1 \
+			|| { tail -25 fake_data/smoke_$$p.log; exit 1; }; \
+	done
+	@ls fake_data/repo/runs_smoke
