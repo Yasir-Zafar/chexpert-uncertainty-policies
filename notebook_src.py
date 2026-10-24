@@ -324,3 +324,71 @@ DATA_FINGERPRINT = hashlib.sha256(
 ).hexdigest()
 print(f"test: {TEST['study_id'].nunique()} studies, {TEST['patient_id'].nunique()} patients")
 print(f"data fingerprint: {DATA_FINGERPRINT}")
+
+# %% [markdown]
+# ## 1.2 Patient-level split
+#
+# The official training rows are split by patient into *analysis train* (90%) and *internal
+# validation* (10%), so no patient appears in both. Validation keeps the original -1 labels.
+# Patients are visited in a seeded random order and added to validation until it holds 10% of
+# the images, which keeps the image fraction within one patient of the target.
+#
+# The split is created **once**, by the builder, outside Kaggle, and committed to
+# `splits/split_seed42.csv` before the code version is tagged. Every run then loads that file
+# from the tagged clone, so all teammates train on the identical split even when their runs
+# overlap in time. A Kaggle run never creates a split: if the file is missing it stops.
+
+# %%
+SPLIT_PATH = REPO_DIR / "splits" / f"split_seed{CONFIG['split_seed']}.csv"
+
+
+def make_split_csv(df: pd.DataFrame) -> str:
+    """Deterministic patient-level split of ``df`` as CSV text (patient_id, split)."""
+    patients = np.array(sorted(df["patient_id"].unique()))
+    images = df["patient_id"].value_counts()
+    order = np.random.default_rng(CONFIG["split_seed"]).permutation(len(patients))
+    target = round(CONFIG["val_fraction"] * len(df))
+    val, n_val = set(), 0
+    for i in order:
+        if n_val >= target:
+            break
+        val.add(patients[i])
+        n_val += images[patients[i]]
+    split = ["val" if p in val else "train" for p in patients]
+    return pd.DataFrame({"patient_id": patients, "split": split}).to_csv(
+        index=False, lineterminator="\n"
+    )
+
+
+expected_split = make_split_csv(TRAIN_ALL)
+if SPLIT_PATH.is_file():
+    if SPLIT_PATH.read_text() != expected_split:
+        print("warning: regenerating the split gives a different file; using the committed one")
+elif IS_KAGGLE:
+    raise FileNotFoundError(
+        f"{SPLIT_PATH.relative_to(REPO_DIR)} is missing at {REPO_REF}. The builder creates it once "
+        "outside Kaggle and commits it before tagging; never create it in a run."
+    )
+else:
+    SPLIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SPLIT_PATH.write_text(expected_split)
+    print(f"created {SPLIT_PATH} (commit it before tagging the code version)")
+
+split_table = pd.read_csv(SPLIT_PATH)
+assert split_table["patient_id"].is_unique, "a patient is listed twice in the split file"
+assert set(split_table["split"]) == {"train", "val"}
+assert set(split_table["patient_id"]) == set(TRAIN_ALL["patient_id"]), (
+    "split file does not cover exactly the patients in train.csv (different data?)"
+)
+SPLIT_SHA256 = sha256_file(SPLIT_PATH)
+
+split_of = TRAIN_ALL["patient_id"].map(split_table.set_index("patient_id")["split"])
+TRAIN = TRAIN_ALL[split_of == "train"].reset_index(drop=True)
+VAL = TRAIN_ALL[split_of == "val"].reset_index(drop=True)
+assert not set(TRAIN["patient_id"]) & set(VAL["patient_id"]), "patient in both train and val"
+val_share = len(VAL) / len(TRAIN_ALL)
+assert abs(val_share - CONFIG["val_fraction"]) <= 0.005, f"validation share {val_share:.2%}"
+
+for name, frame in [("analysis train", TRAIN), ("internal val", VAL), ("test", TEST)]:
+    print(f"{name:15s} {len(frame):>7,} images {frame['patient_id'].nunique():>6,} patients")
+print(f"validation share {val_share:.2%}; split sha256 {SPLIT_SHA256}")
