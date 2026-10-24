@@ -314,8 +314,12 @@ assert set(np.unique(TEST[PATHOLOGIES])) <= {0.0, 1.0}, "test labels must be 0 o
 assert not set(TRAIN_ALL["patient_id"]) & set(TEST["patient_id"]), "train/test patients overlap"
 assert TRAIN_ALL["path"].is_unique and TEST["path"].is_unique
 
+# A CSV-only copy (no image folders) is enough to build the split and statistics locally.
+csv_only = not IS_KAGGLE and not (DATA_ROOT / "train").is_dir()
+if csv_only:
+    print("note: no image folders under the data root; image file check skipped")
 check_rng = np.random.default_rng(0)
-for frame in (TRAIN_ALL, TEST):
+for frame in [] if csv_only else (TRAIN_ALL, TEST):
     sample = check_rng.choice(frame["path"].to_numpy(), size=min(20, len(frame)), replace=False)
     missing = [p for p in sample if not (DATA_ROOT / p).is_file()]
     assert not missing, f"image files missing under {DATA_ROOT}: {missing[:3]}"
