@@ -290,7 +290,9 @@ An optional literature reference row (published values from the cited paper, typ
 
 ## 6. What each run saves (`runs/<policy>_s<seed>/`, all small)
 
-`run_info.json` (policy, seed, `code_version`, CONFIG, split SHA-256, data fingerprint = SHA-256 over `train.csv` and `valid.csv`, who ran it, GPU name and count, torch and CUDA versions, status, best epoch, epochs run, stop reason, trainable parameters, training seconds, images per second, inference ms per image, peak GPU memory), `metrics_epoch.csv`, `grad_stats.csv`, `gpu_trace.csv`, `train.log`, `val_preds.npz`, `test_preds.npz` (row ids, patient ids, raw labels, scores, logits), `val_preds_certain.npz` and `test_preds_certain.npz` (same, from the certain-only checkpoint), `cam_test.npz`, `cam_val_subset.npz`, and for the MC run `mc_val.npz` and `mc_test.npz` (sample mean, predictive entropy, deterministic score). Test labels are read only after the best checkpoint is chosen, and only to predict.
+`run_info.json` (policy, seed, `code_version`, CONFIG, split SHA-256, data fingerprint = SHA-256 over `train.csv` and `valid.csv`, who ran it, GPU name and count, torch and CUDA versions, status, best epoch, epochs run, stop reason, trainable parameters, training seconds, images per second, inference ms per image, peak GPU memory), `metrics_epoch.csv`, `grad_stats.csv`, `gpu_trace.csv`, `train.log`, `val_preds.npz`, `test_preds.npz` (row ids, scores, logits; **no labels**, see below), `val_preds_certain.npz` and `test_preds_certain.npz` (same, from the certain-only checkpoint), `cam_test.npz`, `cam_val_subset.npz`, and for the MC run `mc_val.npz` and `mc_test.npz` (sample mean, predictive entropy, deterministic score). Test labels are read only after the best checkpoint is chosen, and only to predict.
+
+**No CheXpert labels leave Kaggle.** The repository is public and the CheXpert licence forbids redistributing the data, so pushed files carry the row id (the stripped image path), scores and logits, never labels. Results mode rejoins labels from `train.csv` / `valid.csv` (attached as a Kaggle dataset) by row id, and asserts that every row id is found. Split and qualitative-id files hold patient ids and paths only. The 10 x 10 CAMs are model outputs, not images.
 
 ---
 
@@ -382,7 +384,7 @@ Size: S up to 1 hour, M 1 to 3 hours, L 3 to 6 hours of hands-on time (excluding
 | BLD-5 | Builder | L | BLD-3 | Chunk 5 done |
 | BLD-6 | Builder | L | BLD-5 | Chunk 6 done |
 | RES-1 | Builder | M | BLD-6, RUN-R1, RUN-R2, RUN-R3, RUN-R4, RUN-R5, RUN-R6, RUN-R7 | Results mode run on a Kaggle CPU session with consistency checks passing; `results/` committed; executed notebook downloaded |
-| REV-1 | Teammate 1 | S | RES-1 | Two policies' mean and per-pathology AUROC and AUPRC recomputed independently from `test_preds.npz` and matched to the tables, or discrepancies reported |
+| REV-1 | Teammate 1 | S | RES-1 | Two policies' mean and per-pathology AUROC and AUPRC recomputed independently from `test_preds.npz` joined to `valid.csv` by row id and matched to the tables, or discrepancies reported |
 | REV-2 | Teammate 2 | S | RES-1 | Notebook run top to bottom from a clean session in results mode; unclear cells and missing explanations reported |
 | SUB-1 | Builder | S | REV-1, REV-2 | Final executed notebook and exported tables and figures handed to the paper (the OPT-RES versions if extra seeds were run); README states the seed count; no secrets in git history |
 
