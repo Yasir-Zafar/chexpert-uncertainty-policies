@@ -42,3 +42,16 @@ FAKE_ENV := DATA_ROOT=$(FAKE_ROOT) REPO_DIR=fake_data/repo MPLBACKEND=Agg
 
 prep: fake
 	$(FAKE_ENV) MODE=train $(PY) notebook_src.py
+
+.PHONY: check
+
+# Fresh fake repo, two notebook runs: the second must reload the split and qualitative files
+# unchanged (byte-identical), proving they are created once and only read afterwards.
+check: lint hooktest fake
+	rm -rf fake_data/repo
+	$(FAKE_ENV) MODE=train $(PY) notebook_src.py > /dev/null
+	sha256sum fake_data/repo/splits/split_seed42.csv fake_data/repo/qual/qual_ids.csv > fake_data/created.sha
+	$(FAKE_ENV) MODE=results $(PY) notebook_src.py > fake_data/rerun.log
+	! grep -E "^(created|warning)" fake_data/rerun.log
+	sha256sum --check --quiet fake_data/created.sha
+	@echo "check ok"
