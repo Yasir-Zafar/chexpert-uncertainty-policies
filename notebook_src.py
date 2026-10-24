@@ -50,11 +50,15 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 # %%
 import base64
 import hashlib
+import math
 import platform
 import random
 import re
+import shutil
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1224,3 +1228,275 @@ assert always_better["p"] == 2 / (len(boot) + 1), "p-value must be two-sided"
 point, lo, hi = bootstrap_ci(lambda i: auroc(y_r[i], s_r[i]), boot, 200)
 assert lo < point < hi
 print(f"metrics ok: AUROC {point:.3f} (95% CI {lo:.3f}-{hi:.3f}) on a random check set")
+
+# %% [markdown]
+# # Part 3: Training run (`MODE == "train"`)
+#
+# ## 3.1 Training functions
+#
+# One recipe for every policy (proposal Table III): AdamW (lr 1e-4, betas 0.9/0.999, weight
+# decay 1e-5), batch 32, up to 10 epochs, learning rate x0.1 when the validation mean AUROC has
+# not improved for one epoch, early stopping after three epochs without improvement, FP16 mixed
+# precision on the GPU. The policy only supplies the head size, the loss and the validation
+# labels.
+#
+# Early stopping and the scheduler follow the validation mean AUROC computed with the policy's
+# own validation labels (the proposal's rule); that checkpoint is `best.pt`. Because those labels
+# differ between policies, the epoch with the best *certain-only* AUROC is also kept
+# (`best_certain.pt`) for the selection-sensitivity table T9.
+#
+# Monitoring never slows a step: one log line every 50 steps, gradient norm and loss scale
+# every 200 steps, and a background thread that samples `nvidia-smi` every 10 seconds. A
+# non-finite loss stops the run with the reason recorded. Checkpoints stay in the Kaggle
+# working directory and are never pushed.
+
+# %%
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+USE_AMP = CONFIG["amp"] and DEVICE.type == "cuda"
+torch.backends.cudnn.benchmark = CONFIG["cudnn_benchmark"]
+assert CONFIG["optimizer"] == "AdamW"
+
+
+class TrainingFailure(RuntimeError):
+    """Training had to stop (for example a non-finite loss); the message is the reason."""
+
+
+def make_logger(path: Path) -> Callable[[str], None]:
+    """Logger that prints a line and appends it to ``path``."""
+
+    def log(message: str) -> None:
+        line = f"{time.strftime('%H:%M:%S')} {message}"
+        print(line, flush=True)
+        with open(path, "a") as f:
+            f.write(line + "\n")
+
+    return log
+
+
+def build_model(policy: Policy, seed: int, pretrained: bool = True) -> DenseNetClassifier:
+    """The shared DenseNet-121 with this policy's head, on ``DEVICE``."""
+    model = DenseNetClassifier(policy.n_outputs, policy.dropout_p, seed, pretrained).to(DEVICE)
+    if CONFIG["channels_last"]:
+        model = model.to(memory_format=torch.channels_last)
+    return model
+
+
+def make_optimizer(model: nn.Module) -> torch.optim.Optimizer:
+    """AdamW with the frozen protocol settings."""
+    return torch.optim.AdamW(
+        model.parameters(),
+        lr=CONFIG["lr"],
+        betas=CONFIG["betas"],
+        weight_decay=CONFIG["weight_decay"],
+    )
+
+
+class GpuTrace:
+    """Background thread sampling ``nvidia-smi`` into a CSV; does nothing without a GPU."""
+
+    FIELDS = "utilization.gpu,memory.used,clocks.sm,power.draw"
+
+    def __init__(self, path: Path, interval_s: float = 10.0) -> None:
+        self.path, self.interval_s = path, interval_s
+        self.enabled = DEVICE.type == "cuda" and shutil.which("nvidia-smi") is not None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+
+    def _sample(self) -> None:
+        query = ["nvidia-smi", f"--query-gpu={self.FIELDS}", "--format=csv,noheader,nounits"]
+        while True:
+            out = subprocess.run(query + ["-i", "0"], capture_output=True, text=True).stdout
+            with open(self.path, "a") as f:
+                f.write(f"{time.time() - self._start:.0f},{out.strip()}\n")
+            if self._stop.wait(self.interval_s):
+                return
+
+    def __enter__(self) -> "GpuTrace":
+        if self.enabled:
+            self.path.write_text(f"time_s,{self.FIELDS}\n")
+            self._start = time.time()
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.enabled:
+            self._stop.set()
+            self._thread.join()
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    policy: Policy,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    generator: torch.Generator,
+    epoch: int,
+    grad_log: list[dict],
+    log: Callable[[str], None],
+) -> dict:
+    """One pass over ``loader``; returns the mean loss, seconds and images per second."""
+    model.train()
+    loader.sampler.set_epoch(epoch)
+    n_steps, seen = len(loader), 0
+    loss_sum = torch.zeros((), device=DEVICE)  # summed on the device: no sync per step
+    start = time.perf_counter()
+    for step, (x, y, _) in enumerate(loader, start=1):
+        x, y = to_model_input(x, DEVICE), y.to(DEVICE, non_blocking=True)
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            logits = model(x)
+        loss = policy.loss(logits, y, generator)  # float32 inside every policy loss
+        optimizer.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        if step % CONFIG["grad_stats_every"] == 0:
+            scaler.unscale_(optimizer)
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), math.inf)  # measure only
+            grad_log.append(
+                {
+                    "epoch": epoch,
+                    "step": step,
+                    "grad_norm": norm.item(),
+                    "loss_scale": scaler.get_scale(),
+                }
+            )
+        scaler.step(optimizer)
+        scaler.update()
+        loss_sum += loss.detach() * len(x)
+        seen += len(x)
+        if step % CONFIG["log_every"] == 0 or step == n_steps:
+            mean_loss = (loss_sum / seen).item()
+            if not math.isfinite(mean_loss):
+                raise TrainingFailure(f"non-finite loss in epoch {epoch} by step {step}")
+            elapsed = time.perf_counter() - start
+            eta_min = (n_steps - step) * elapsed / step / 60
+            lr = optimizer.param_groups[0]["lr"]
+            log(
+                f"epoch {epoch} step {step}/{n_steps} loss {mean_loss:.4f} "
+                f"{seen / elapsed:.0f} img/s eta {eta_min:.1f} min lr {lr:.1e} "
+                f"scale {scaler.get_scale():.0f}"
+            )
+    seconds = time.perf_counter() - start
+    return {"train_loss": mean_loss, "train_seconds": seconds, "images_per_sec": seen / seconds}
+
+
+@torch.no_grad()
+def predict_logits(model: nn.Module, loader: DataLoader) -> np.ndarray:
+    """Logits for every row of an unshuffled loader, in row order, as float32."""
+    model.eval()
+    outputs = []
+    for x, _, _ in loader:
+        with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
+            outputs.append(model(to_model_input(x, DEVICE)).float().cpu())
+    return torch.cat(outputs).numpy()
+
+
+def scores_from_logits(policy: Policy, logits: np.ndarray) -> np.ndarray:
+    """Per-pathology probabilities from saved logits."""
+    return policy.score(torch.from_numpy(logits)).numpy()
+
+
+def validation_aurocs(policy: Policy, y_raw: np.ndarray, scores: np.ndarray) -> tuple[float, float]:
+    """Mean validation AUROC with policy-resolved labels, and with certain labels only."""
+    resolved = per_pathology(auroc, policy.val_labels(y_raw), scores)
+    certain = per_pathology(auroc, certain_labels(y_raw), scores)
+    return float(np.mean(resolved)), float(np.mean(certain))
+
+
+def fit(
+    policy: Policy,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    seed: int,
+    max_epochs: int,
+    run_dir: Path,
+    ckpt_dir: Path,
+    log: Callable[[str], None],
+    on_epoch_end: Callable[[], None] | None = None,
+) -> tuple[nn.Module, dict]:
+    """Train one policy; return the model restored to ``best.pt`` and a run summary."""
+    seed_everything(seed)
+    model = build_model(policy, seed)
+    optimizer = make_optimizer(model)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=CONFIG["plateau_factor"], patience=CONFIG["plateau_patience"]
+    )
+    scaler = torch.amp.GradScaler(DEVICE.type, enabled=USE_AMP)
+    generator = torch.Generator().manual_seed(seed)  # LSR target draws
+    train_loader = make_loader(train_df, train=True, seed=seed)
+    val_loader = make_loader(val_df, train=False, seed=seed)
+    y_val = label_matrix(val_df)
+    if DEVICE.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
+    history, grad_log = [], []
+    best = {"best.pt": (-math.inf, 0), "best_certain.pt": (-math.inf, 0)}
+    stale, stop_reason = 0, "max_epochs"
+    for epoch in range(1, max_epochs + 1):
+        stats = train_one_epoch(
+            model, train_loader, policy, optimizer, scaler, generator, epoch, grad_log, log
+        )
+        scores = scores_from_logits(policy, predict_logits(model, val_loader))
+        val_auroc, val_certain = validation_aurocs(policy, y_val, scores)
+        lr = optimizer.param_groups[0]["lr"]
+        scheduler.step(val_auroc)
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9 if DEVICE.type == "cuda" else 0.0
+        history.append(
+            {
+                "epoch": epoch,
+                **stats,
+                "val_auroc": val_auroc,
+                "val_auroc_certain": val_certain,
+                "lr": lr,
+                "peak_mem_gb": peak_gb,
+            }
+        )
+        pd.DataFrame(history).to_csv(run_dir / "metrics_epoch.csv", index=False)
+        pd.DataFrame(grad_log, columns=["epoch", "step", "grad_norm", "loss_scale"]).to_csv(
+            run_dir / "grad_stats.csv", index=False
+        )
+        improved = val_auroc > best["best.pt"][0]
+        for name, value in [("best.pt", val_auroc), ("best_certain.pt", val_certain)]:
+            if value > best[name][0]:
+                best[name] = (value, epoch)
+                torch.save(model.state_dict(), ckpt_dir / name)
+        stale = 0 if improved else stale + 1
+        log(
+            f"epoch {epoch} done: val AUROC {val_auroc:.4f} (certain-only {val_certain:.4f}), "
+            f"best epoch {best['best.pt'][1]}, {stats['images_per_sec']:.0f} img/s"
+        )
+        if on_epoch_end is not None:
+            on_epoch_end()
+        if stale >= CONFIG["early_stop_patience"]:
+            stop_reason = "early_stop"
+            break
+
+    model.load_state_dict(torch.load(ckpt_dir / "best.pt", map_location=DEVICE, weights_only=True))
+    summary = {
+        "best_epoch": best["best.pt"][1],
+        "best_certain_epoch": best["best_certain.pt"][1],
+        "epochs_run": len(history),
+        "stop_reason": stop_reason,
+        "train_seconds": sum(h["train_seconds"] for h in history),
+        "images_per_sec": float(np.mean([h["images_per_sec"] for h in history])),
+        "peak_mem_gb": max(h["peak_mem_gb"] for h in history),
+    }
+    return model, summary
+
+
+# Check: every policy's loss falls on a repeated small batch (random backbone, 64 x 64 input).
+small_x = F.interpolate(batch[:8], size=64, mode="bilinear", align_corners=False)
+small_y = y_ex.repeat(4, 1)
+for name, policy in POLICIES.items():
+    torch.manual_seed(SEED)
+    net = DenseNetClassifier(policy.n_outputs, policy.dropout_p, SEED, pretrained=False)
+    opt = torch.optim.AdamW(net.parameters(), lr=1e-3)
+    gen = torch.Generator().manual_seed(SEED)
+    losses = []
+    for _ in range(8):
+        step_loss = policy.loss(net(small_x), small_y, gen)
+        opt.zero_grad()
+        step_loss.backward()
+        opt.step()
+        losses.append(step_loss.item())
+    assert losses[-1] < losses[0], f"{name}: loss did not fall on a repeated batch: {losses}"
+print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for every policy")
