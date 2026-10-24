@@ -85,7 +85,7 @@ The file submitted is the executed `results` notebook: all code visible, outputs
 
 **Authoring.** Write `notebook_src.py` with `# %%` cell markers (jupytext) and generate the `.ipynb` from it. Plain text is easy to edit cell by cell, run as a script and lint. The generated `.ipynb` is what gets uploaded to Kaggle. The `.py` is the source of truth.
 
-**Local development without the licensed data.** `tools/fake_chexpert.py` builds a tiny CheXpert-shaped dataset (frontal and lateral rows, AP and PA, -1/0/1/blank labels, random grayscale JPEGs). Environment variables `MODE`, `POLICY`, `SEED`, `SMOKE`, `DATA_ROOT` let the whole notebook run on CPU against it. The tool is not part of the submission, and the notebook contains no fake-data code.
+**Local development without the licensed data.** `tools/fake_chexpert.py` builds a tiny CheXpert-shaped dataset (frontal and lateral rows, AP and PA, -1/0/1/blank labels, random grayscale JPEGs). Environment variables `MODE`, `POLICY`, `SEED`, `SMOKE`, `DATA_ROOT` and `REPO_DIR` let the whole notebook run on CPU against it. `REPO_DIR` points the notebook at `fake_data/repo`, so a split or qualitative list built from fake data can never land in the real `splits/` or `qual/` folders. The tool is not part of the submission, and the notebook contains no fake-data code.
 
 **GitHub logging.**
 - Each run pushes `runs/<policy>_s<seed>/` to branch `run/<policy>_s<seed>` from inside the notebook, using a fine-grained token from Kaggle Secrets. Progress (the epoch log) is pushed after every epoch, so a dead session still leaves history.
@@ -121,6 +121,7 @@ POLICY = os.environ.get("POLICY", "u_zeros")
 SEED = int(os.environ.get("SEED", 42))
 SMOKE = os.environ.get("SMOKE", "0") == "1"
 N_SEEDS = os.environ.get("N_SEEDS", "1")
+REPO_REF = os.environ.get("REPO_REF", "v1")  # tagged code version cloned on Kaggle; leave alone
 ```
 
 `SEED` is read in train mode and must be 42, 43 or 44. `N_SEEDS` is read in results mode: `"1"` (default) uses seed 42 only, `"2"` uses 42 and 43, `"3"` uses all three, and `"auto"` uses the largest count for which every policy has every one of those seeds complete. An explicit count with runs missing stops with a list of what is missing.
@@ -130,7 +131,6 @@ N_SEEDS = os.environ.get("N_SEEDS", "1")
 ```python
 CONFIG = {
     "code_version": "v1",
-    "data_root": os.environ.get("DATA_ROOT", "/kaggle/input/chexpert"),
     "pathologies": ["Atelectasis", "Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion"],
     "image_size": 320,
     "val_fraction": 0.10,
@@ -159,10 +159,12 @@ CONFIG = {
     "cudnn_benchmark": False,
     "log_every": 50,
     "grad_stats_every": 200,
+    "qual_val_images": 600,
+    "qual_min_uncertain": 50,
 }
 ```
 
-Not in CONFIG, by design: head, loss, dropout and MC settings live in the policy registry (cell 10).
+Not in CONFIG, by design: head, loss, dropout and MC settings live in the policy registry (cell 10). The dataset path is not in CONFIG either: the mount path can differ between teammates' Kaggle accounts, and results mode requires identical CONFIGs. The data fingerprint is what proves the data is the same.
 
 **Defaults where the proposal is silent** (printed in the notebook's protocol cell so the paper can state them):
 
@@ -196,13 +198,13 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 **Part 0: setup**
 - **C0** Title, research questions, how to run (modes, which cell to edit).
 - **C1** Run settings (above, including `N_SEEDS`). **C2** CONFIG (above). Imports, seed helper, version print.
-- **C3** Environment: Kaggle detection, secrets, git helpers (`clone_repo`, `push_run`, `fetch_runs`) with the token passed per command and scrubbed from logs, dataset root discovery.
+- **C3** Environment: Kaggle detection, secrets, git helpers with the token passed per command and scrubbed from logs (`run_git`, `clone_repo` now; `push_run` in chunk 4, `fetch_runs` in chunk 5), dataset root discovery. On Kaggle the repo is cloned at `REPO_REF`, so every run reads the same committed split and qualitative files.
 
 **Part 1: data preparation**
-- **C4** Read both CSVs, strip the path prefix, filter to Frontal then AP/PA (print the row count after each), parse patient and study ids, blanks to 0, keep -1. Mirror check: `train.csv` 223,414 rows and `valid.csv` 234 rows before filtering.
-- **C5** Dataset statistics: positive / negative / uncertain / not-mentioned per pathology for full train, analysis train, internal validation and test; images and patients per split; bar chart of uncertain prevalence. Writes `results/tables/dataset_stats.csv` and `.tex`.
-- **C6** Patient-level 90/10 split, seed 42. If `splits/split_seed42.csv` exists in the repo it is loaded; otherwise (builder only, once) it is created and committed. Asserts: no patient in both parts, validation fraction within 0.5 percentage points of 10%, SHA-256 printed.
-- **C7** Fixed qualitative id lists (`qual/qual_ids.csv`), created once with a fixed seed **before any training**: every test image, plus a 600-image internal-validation subset stratified so each pathology has at least 50 uncertain-labelled images.
+- **C4** Read both CSVs, strip the path prefix (the stripped path is the row id everywhere), filter to Frontal then AP/PA (print the row count after each), parse patient and study ids, keep raw labels (blanks become 0 in `label_matrix`, -1 kept), data fingerprint. Mirror check: `train.csv` 223,414 rows and `valid.csv` 234 rows before filtering, enforced on Kaggle only.
+- **C5** Patient-level 90/10 split, seed 42: patients in seeded order are added to validation until it holds 10% of the images. If `splits/split_seed42.csv` exists in the repo it is loaded; otherwise it is created, **outside Kaggle only**, by the builder, once, and committed before tagging. A Kaggle run with no split file stops, so concurrent runs can never use different splits. Asserts: file covers exactly the training patients, no patient in both parts, validation fraction within 0.5 percentage points of 10%, SHA-256 printed. (C5 and C6 swapped from the first version of this plan: the statistics need the split.)
+- **C6** Dataset statistics: positive / negative / uncertain / not-mentioned per pathology for full train, analysis train, internal validation and test; images, studies and patients per split; bar chart of uncertain prevalence. Writes `results/tables/dataset_stats` and `dataset_splits` (`.csv`, `.tex`) and `results/figures/uncertain_prevalence`.
+- **C7** Fixed qualitative id lists (`qual/qual_ids.csv`), created once with a fixed seed **before any training**, under the same create-once-outside-Kaggle rule as the split: every test image, plus a 600-image internal-validation subset stratified so each pathology has at least 50 uncertain-labelled images.
 - **C8** Dataset class (uint8 1 x 320 x 320, raw labels in {0, 1, -1}), CPU transforms (rotation, random resized crop, brightness and contrast jitter, no flip), GPU-side normalisation (3 channels, ImageNet mean and std), seeded sampler (seed + epoch, so every policy sees the same order), worker seeding.
 
 **Part 2: model, policies, metrics**
@@ -339,10 +341,11 @@ Size: S up to 1 hour, M 1 to 3 hours, L 3 to 6 hours of hands-on time (excluding
 | SET-3-T1 | Teammate 1 | S | SET-1 | Same as SET-3-B in their accounts; token expiry set after their last run |
 | SET-3-T2 | Teammate 2 | S | SET-1 | Same as SET-3-B in their accounts |
 | BLD-1 | Builder | L | SET-2 | Chunk 1 done, including the `Makefile` and pre-commit hook |
+| SET-4 | Builder | S | BLD-1, SET-2 | Real `train.csv` and `valid.csv` downloaded locally (CSVs only, e.g. `kaggle datasets download <slug> -f train.csv`); notebook run with `DATA_ROOT` pointing at them and `REPO_DIR` at the repo; mirror row counts pass; `splits/split_seed42.csv` and `qual/qual_ids.csv` created and merged to `main` before any Kaggle run |
 | BLD-2 | Builder | L | BLD-1 | Chunk 2 done |
 | BLD-3 | Builder | L | BLD-2 | Chunk 3 done |
 | BLD-4 | Builder | M | BLD-3, SET-1 | Chunk 4 done; `.ipynb` generated and committed; README has the teammate steps from section 7; `tools/status.py` works |
-| GATE-1 | Builder | M | BLD-4, SET-3-B | Real-data smoke on Kaggle for `u_zeros_mc` and `u_multiclass`: files on their branches, no token in logs, `.pt` not in git, expected row counts, throughput printed, data fingerprint recorded; monitoring overhead check: step time over 200 steps with logging, grad stats and GPU trace on versus off differs by under 1%, otherwise lower the frequencies |
+| GATE-1 | Builder | M | BLD-4, SET-3-B, SET-4 | Real-data smoke on Kaggle for `u_zeros_mc` and `u_multiclass`: files on their branches, no token in logs, `.pt` not in git, expected row counts, throughput printed, data fingerprint recorded; monitoring overhead check: step time over 200 steps with logging, grad stats and GPU trace on versus off differs by under 1%, otherwise lower the frequencies |
 | GATE-2 | Builder | S | GATE-1 | P100 versus T4 compared, one accelerator chosen; 200-step A/B of `channels_last` and `cudnn_benchmark` on it, fastest pair frozen in CONFIG; version tag `v1` created, teammates told the tag and the accelerator |
 | RUN-R1 | Builder | L | GATE-2 | `u_zeros` complete on `run/u_zeros_s42`; after epoch 2 post "go" to the team; sanity checks (below) pass |
 | RUN-R6 | Builder | L | RUN-R1 | `u_zeros_mc` complete, including `mc_val.npz` and `mc_test.npz` |
