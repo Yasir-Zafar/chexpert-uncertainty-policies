@@ -1029,3 +1029,198 @@ assert np.isnan(POLICIES["u_multiclass"].val_labels(y_np)[uncertain]).all()
 assert np.isfinite(POS_WEIGHT.numpy()).all() and (POS_WEIGHT > 0).all(), "bad positive weights"
 assert len(MAIN_POLICIES) == 6
 print(f"policies ok: {', '.join(POLICIES)}")
+
+# %% [markdown]
+# ## 2.3 Metrics
+#
+# All metrics are written in NumPy so the evaluation is fully visible; scikit-learn appears
+# only in the checks at the end of this cell, as an independent reference.
+#
+# - **AUROC** (main metric) from average ranks, so tied scores count one half.
+# - **AUPRC** as average precision over distinct score thresholds.
+# - **F1** at the threshold that maximises Youden's J (TPR - FPR) on internal validation.
+# - **ECE** over 10 equal-width bins of the positive-class probability, and the **Brier** score.
+# - **Predictive entropy** (in nats) of the MC Dropout mean probability.
+#
+# Confidence intervals resample *patients*, not images, because images of one patient are not
+# independent. One set of 1,000 resamples (fixed seed) is drawn per evaluation set and reused
+# for every policy and metric, so differences between policies are paired. The paired p-value
+# for "policy A differs from U-Zeros" is
+# p = min(1, 2 min((1 + #{d <= 0}) / (B + 1), (1 + #{d >= 0}) / (B + 1))) over the B bootstrap
+# differences d, as in the proposal.
+
+# %%
+BOOTSTRAP_SEED = CONFIG["split_seed"]
+
+
+def _sorted_counts(y: np.ndarray, s: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Distinct thresholds (descending) with cumulative true and false positives at each."""
+    order = np.argsort(-s, kind="mergesort")
+    s_sorted, y_sorted = s[order], y[order]
+    last = np.r_[np.flatnonzero(np.diff(s_sorted)), len(s_sorted) - 1]
+    tps = np.cumsum(y_sorted)[last]
+    return s_sorted[last], tps, last + 1 - tps
+
+
+def auroc(y: np.ndarray, s: np.ndarray) -> float:
+    """Area under the ROC curve via average ranks; NaN if only one class is present."""
+    n_pos = int(y.sum())
+    n_neg = len(y) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return np.nan
+    values, inverse, counts = np.unique(s, return_inverse=True, return_counts=True)
+    mid_ranks = np.cumsum(counts) - (counts - 1) / 2
+    rank_sum = mid_ranks[inverse][y == 1].sum()
+    return float((rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def auprc(y: np.ndarray, s: np.ndarray) -> float:
+    """Average precision over distinct thresholds; NaN if there are no positives."""
+    if y.sum() == 0:
+        return np.nan
+    _, tps, fps = _sorted_counts(y, s)
+    precision, recall = tps / (tps + fps), tps / tps[-1]
+    return float(np.sum(np.diff(recall, prepend=0.0) * precision))
+
+
+def youden_threshold(y: np.ndarray, s: np.ndarray) -> float:
+    """Score threshold maximising TPR - FPR (predict positive when score >= threshold)."""
+    thresholds, tps, fps = _sorted_counts(y, s)
+    j = tps / max(y.sum(), 1) - fps / max(len(y) - y.sum(), 1)
+    return float(thresholds[np.argmax(j)])
+
+
+def f1_at(y: np.ndarray, s: np.ndarray, threshold: float) -> float:
+    """F1 score when predicting positive for score >= threshold (0 if undefined)."""
+    pred = s >= threshold
+    tp = np.sum(pred & (y == 1))
+    denominator = 2 * tp + np.sum(pred & (y == 0)) + np.sum(~pred & (y == 1))
+    return float(2 * tp / denominator) if denominator else 0.0
+
+
+def ece(y: np.ndarray, p: np.ndarray, n_bins: int = CONFIG["ece_bins"]) -> float:
+    """Expected calibration error over equal-width bins (lo, hi] of the probability."""
+    bins = np.digitize(p, np.linspace(0, 1, n_bins + 1)[1:-1], right=True)
+    total = 0.0
+    for b in np.unique(bins):
+        in_bin = bins == b
+        total += in_bin.sum() * abs(y[in_bin].mean() - p[in_bin].mean())
+    return float(total / len(y))
+
+
+def brier(y: np.ndarray, p: np.ndarray) -> float:
+    """Mean squared difference between probability and label."""
+    return float(np.mean((p - y) ** 2))
+
+
+def binary_entropy(p: np.ndarray) -> np.ndarray:
+    """Entropy (nats) of a Bernoulli with probability ``p``, elementwise."""
+    q = np.clip(p, 1e-12, 1 - 1e-12)
+    return -(q * np.log(q) + (1 - q) * np.log(1 - q))
+
+
+def per_pathology(metric: Callable, labels: np.ndarray, scores: np.ndarray) -> np.ndarray:
+    """``metric`` per pathology column, skipping entries whose label is NaN (excluded)."""
+    results = []
+    for j in range(labels.shape[1]):
+        keep = ~np.isnan(labels[:, j])
+        results.append(metric(labels[keep, j], scores[keep, j]))
+    return np.array(results)
+
+
+def bootstrap_indices(patient_ids: np.ndarray, n_resamples: int, seed: int) -> list[np.ndarray]:
+    """Row indices of ``n_resamples`` patient-level bootstrap resamples (whole patients)."""
+    _, group, counts = np.unique(patient_ids, return_inverse=True, return_counts=True)
+    order = np.argsort(group, kind="mergesort")
+    starts = np.cumsum(counts) - counts
+    rng = np.random.default_rng(seed)
+    resamples = []
+    for _ in range(n_resamples):
+        chosen = rng.integers(0, len(counts), len(counts))
+        sizes = counts[chosen]
+        offsets = np.repeat(starts[chosen] - (np.cumsum(sizes) - sizes), sizes)
+        resamples.append(order[offsets + np.arange(sizes.sum())])
+    return resamples
+
+
+def bootstrap_ci(statistic: Callable[[np.ndarray], float], resamples: list[np.ndarray], n: int):
+    """Point estimate on all ``n`` rows and 95% percentile interval over the resamples."""
+    values = np.array([statistic(idx) for idx in resamples])
+    lo, hi = np.nanpercentile(values, [2.5, 97.5])
+    return statistic(np.arange(n)), float(lo), float(hi)
+
+
+def paired_difference(
+    stat_a: Callable[[np.ndarray], float],
+    stat_b: Callable[[np.ndarray], float],
+    resamples: list[np.ndarray],
+    n: int,
+) -> dict:
+    """Difference A - B with 95% CI and two-sided paired bootstrap p-value."""
+    d = np.array([stat_a(idx) - stat_b(idx) for idx in resamples])
+    d = d[np.isfinite(d)]
+    b = len(d)
+    p = min(1.0, 2 * min((1 + np.sum(d <= 0)) / (b + 1), (1 + np.sum(d >= 0)) / (b + 1)))
+    lo, hi = np.percentile(d, [2.5, 97.5])
+    full = np.arange(n)
+    return {"diff": stat_a(full) - stat_b(full), "lo": float(lo), "hi": float(hi), "p": p}
+
+
+# Checks: hand-worked values, then agreement with scikit-learn on random data with ties.
+assert auroc(np.array([0, 0, 1, 1]), np.array([0.1, 0.4, 0.35, 0.8])) == 0.75
+assert auroc(np.array([0, 1]), np.array([0.5, 0.5])) == 0.5, "a tie must count one half"
+assert np.isnan(auroc(np.array([1, 1]), np.array([0.2, 0.3])))
+
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    f1_score,
+    roc_auc_score,
+    roc_curve,
+)
+
+check_rng = np.random.default_rng(0)
+for _ in range(20):
+    y_r = check_rng.integers(0, 2, 300)
+    s_r = np.round(check_rng.random(300) * 0.6 + 0.4 * y_r, 2)  # rounding creates ties
+    assert abs(auroc(y_r, s_r) - roc_auc_score(y_r, s_r)) < 1e-12
+    assert abs(auprc(y_r, s_r) - average_precision_score(y_r, s_r)) < 1e-12
+    assert abs(brier(y_r, s_r) - brier_score_loss(y_r, s_r)) < 1e-12
+    fpr, tpr, thr = roc_curve(y_r, s_r)
+    assert youden_threshold(y_r, s_r) == thr[np.argmax(tpr - fpr)]
+    t = youden_threshold(y_r, s_r)
+    assert abs(f1_at(y_r, s_r, t) - f1_score(y_r, s_r >= t)) < 1e-12
+
+# Perfect calibration: in every bin the positive rate equals the (constant) probability.
+p_cal = np.repeat(np.arange(0.05, 1, 0.1), 20)
+y_cal = np.concatenate([np.r_[np.ones(k), np.zeros(20 - k)] for k in range(1, 20, 2)])
+assert ece(y_cal, p_cal) < 1e-12, "ECE must be 0 for perfectly calibrated predictions"
+assert abs(ece(np.r_[np.ones(5), np.zeros(5)], np.ones(10)) - 0.5) < 1e-12
+# A probability on a bin edge belongs to the lower bin: 0.1 is in (0, 0.1], not (0.1, 0.2].
+edge_ece = ece(np.array([0, 0, 1, 1]), np.array([0.1, 0.1, 0.15, 0.15]))
+assert abs(edge_ece - 0.475) < 1e-12, edge_ece
+assert abs(binary_entropy(np.array([0.5]))[0] - np.log(2)) < 1e-9
+assert binary_entropy(np.array([0.0, 1.0])).max() < 1e-9
+
+pids = np.array(["a", "b", "b", "c", "c", "c"])
+for idx in bootstrap_indices(pids, 50, BOOTSTRAP_SEED):
+    picked = pd.Series(pids[idx]).value_counts()
+    size = pd.Series(pids).value_counts()
+    assert all(picked[p] % size[p] == 0 for p in picked.index), "a patient was split"
+first = bootstrap_indices(pids, 5, BOOTSTRAP_SEED)
+again = bootstrap_indices(pids, 5, BOOTSTRAP_SEED)
+assert all(np.array_equal(a, b) for a, b in zip(first, again, strict=True)), "not reproducible"
+
+y_r = check_rng.integers(0, 2, 200)
+s_r = check_rng.random(200) + 0.3 * y_r
+groups = np.repeat(np.arange(100), 2)
+boot = bootstrap_indices(groups, 200, BOOTSTRAP_SEED)
+same = paired_difference(
+    lambda i: auroc(y_r[i], s_r[i]), lambda i: auroc(y_r[i], s_r[i]), boot, 200
+)
+assert same == {"diff": 0.0, "lo": 0.0, "hi": 0.0, "p": 1.0}, same
+always_better = paired_difference(lambda i: 1.0, lambda i: 0.0, boot, 200)
+assert always_better["p"] == 2 / (len(boot) + 1), "p-value must be two-sided"
+point, lo, hi = bootstrap_ci(lambda i: auroc(y_r[i], s_r[i]), boot, 200)
+assert lo < point < hi
+print(f"metrics ok: AUROC {point:.3f} (95% CI {lo:.3f}-{hi:.3f}) on a random check set")
