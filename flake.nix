@@ -16,8 +16,9 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = [
-            # CPU-only torch: local work runs on the fake dataset; real training happens on Kaggle.
-            (pkgs.python3.withPackages (
+            # Python 3.13 to match Kaggle's image (Colab runtime base). CPU-only torch: local work
+            # runs on the fake dataset; real training happens on Kaggle.
+            (pkgs.python313.withPackages (
               ps: with ps; [
                 torch
                 torchvision
