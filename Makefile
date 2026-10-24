@@ -33,3 +33,12 @@ fake: $(FAKE_ROOT)/train.csv
 $(FAKE_ROOT)/train.csv: tools/fake_chexpert.py
 	rm -rf $(FAKE_ROOT)
 	$(PY) tools/fake_chexpert.py --out $(FAKE_ROOT)
+
+# Notebook against the fake data. REPO_DIR keeps fake splits and results out of the real repo
+# folders, so a fake split can never be committed as splits/split_seed42.csv.
+FAKE_ENV := DATA_ROOT=$(FAKE_ROOT) REPO_DIR=fake_data/repo MPLBACKEND=Agg
+
+.PHONY: prep
+
+prep: fake
+	$(FAKE_ENV) MODE=train $(PY) notebook_src.py
