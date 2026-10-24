@@ -54,6 +54,7 @@ import platform
 import random
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import cv2
@@ -63,6 +64,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torchvision
+from torch.utils.data import DataLoader, Dataset, Sampler
+from torchvision.transforms import v2 as T
 
 CONFIG = {
     "code_version": "v1",
@@ -543,3 +546,145 @@ qual_uncertain = (qual_val[PATHOLOGIES] == -1).sum()
 assert (qual_uncertain >= CONFIG["qual_min_uncertain"]).all(), qual_uncertain.to_dict()
 print(f"qualitative list: {len(qual_val)} val + {len(TEST)} test images")
 print("uncertain per pathology in the val subset:", qual_uncertain.to_dict())
+
+# %% [markdown]
+# ## 1.5 Dataset and loaders
+#
+# Images are read as grayscale and resized directly to 320 x 320 (no letterboxing), so a
+# sample is a uint8 tensor of shape (1, 320, 320) with its raw labels in {-1, 0, 1}; each
+# policy decides later what -1 means. Training augmentation runs on the CPU workers: rotation
+# up to 10 degrees, a random resized crop keeping 90-100% of the area, and brightness and
+# contrast jitter of 0.1. There is no horizontal flip (it would move the heart to the right).
+# Conversion to float, the copy to three channels and ImageNet normalisation happen on the
+# GPU (`to_model_input`), which keeps the CPU workers and the host-to-device copy light.
+#
+# The training order comes from `EpochSampler`, a permutation that depends only on the seed
+# and the epoch. Two policies run with the same seed therefore see the same images in the same
+# order with the same augmentation, whoever runs them and whenever.
+
+# %%
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+TRAIN_AUGMENT = T.Compose(
+    [
+        T.RandomRotation(CONFIG["rotation_deg"]),
+        T.RandomResizedCrop(
+            CONFIG["image_size"], scale=CONFIG["crop_scale"], ratio=CONFIG["crop_ratio"]
+        ),
+        T.ColorJitter(brightness=CONFIG["jitter"], contrast=CONFIG["jitter"]),
+    ]
+)
+
+
+def read_image(path: Path, size: int) -> np.ndarray:
+    """Grayscale uint8 image resized directly to ``size`` x ``size``."""
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(path)
+    return cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+
+
+class CheXpertDataset(Dataset):
+    """Frontal images as uint8 (1, S, S) tensors with raw labels in {-1, 0, 1} and row index."""
+
+    def __init__(self, df: pd.DataFrame, augment: bool) -> None:
+        self.paths = [DATA_ROOT / p for p in df["path"]]
+        self.labels = torch.from_numpy(label_matrix(df))
+        self.augment = augment
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, i: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+        x = torch.from_numpy(read_image(self.paths[i], CONFIG["image_size"]))[None]
+        if self.augment:
+            x = TRAIN_AUGMENT(x)
+        return x, self.labels[i], i
+
+
+class EpochSampler(Sampler[int]):
+    """Permutation of ``range(n)`` determined by (seed, epoch) alone; call ``set_epoch``."""
+
+    def __init__(self, n: int, seed: int) -> None:
+        self.n, self.seed, self.epoch = n, seed, 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __iter__(self):
+        return iter(np.random.default_rng([self.seed, self.epoch]).permutation(self.n).tolist())
+
+    def __len__(self) -> int:
+        return self.n
+
+
+def seed_worker(worker_id: int) -> None:
+    """Seed NumPy and ``random`` in a loader worker from its torch seed; one OpenCV thread."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)  # noqa: NPY002 - third-party code may draw from the global RNG
+    random.seed(worker_seed)
+    cv2.setNumThreads(0)
+
+
+def make_loader(
+    df: pd.DataFrame, train: bool, seed: int, num_workers: int | None = None
+) -> DataLoader:
+    """Loader over ``df``: seeded order and augmentation for training, fixed order otherwise."""
+    workers = CONFIG["num_workers"] if num_workers is None else num_workers
+    dataset = CheXpertDataset(df, augment=train)
+    return DataLoader(
+        dataset,
+        batch_size=CONFIG["batch_size"],
+        sampler=EpochSampler(len(dataset), seed) if train else None,
+        num_workers=workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=workers > 0,
+        prefetch_factor=4 if workers > 0 else None,
+        worker_init_fn=seed_worker,
+        generator=torch.Generator().manual_seed(seed),
+        # Notebook-defined classes cannot be pickled to spawned workers; fork is Kaggle's default
+        # but not Python 3.14's, so ask for it explicitly.
+        multiprocessing_context="fork" if workers > 0 and sys.platform == "linux" else None,
+    )
+
+
+def to_model_input(x: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """uint8 (B, 1, S, S) batch to a normalised float (B, 3, S, S) tensor on ``device``."""
+    x = x.to(device, non_blocking=True).float().div_(255).expand(-1, 3, -1, -1)
+    x = (x - IMAGENET_MEAN.to(device)) / IMAGENET_STD.to(device)
+    if CONFIG["channels_last"]:
+        x = x.contiguous(memory_format=torch.channels_last)
+    return x
+
+
+# Sanity checks on a small slice of the training split.
+probe = TRAIN.iloc[:64]
+x0, y0, i0 = CheXpertDataset(probe, augment=True)[0]
+size = CONFIG["image_size"]
+assert x0.shape == (1, size, size) and x0.dtype == torch.uint8, (x0.shape, x0.dtype)
+assert y0.dtype == torch.int8 and set(y0.tolist()) <= {-1, 0, 1} and i0 == 0
+
+order = list(EpochSampler(1000, SEED))
+assert order == list(EpochSampler(1000, SEED)), "same seed and epoch must give the same order"
+assert sorted(order) == list(range(1000))
+later = EpochSampler(1000, SEED)
+later.set_epoch(1)
+assert list(later) != order, "the order must change between epochs"
+other_seed = next(s for s in CONFIG["seeds"] if s != SEED)
+assert list(EpochSampler(1000, other_seed)) != order, "the order must change with the seed"
+
+
+def first_batch(seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """First augmented batch (images, row ids) of a fresh two-worker loader over ``probe``."""
+    x, _, idx = next(iter(make_loader(probe, train=True, seed=seed, num_workers=2)))
+    return x, idx
+
+
+xa, ia = first_batch(SEED)
+xb, ib = first_batch(SEED)
+assert torch.equal(ia, ib) and torch.equal(xa, xb), "same seed must give identical batches"
+assert not torch.equal(first_batch(other_seed)[0], xa), "another seed must change the batch"
+
+batch = to_model_input(xa, torch.device("cpu"))
+assert batch.shape == (len(xa), 3, size, size) and batch.dtype == torch.float32
+print(f"loader ok: batch {tuple(batch.shape)}, order and augmentation reproducible per seed")
