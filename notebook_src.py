@@ -55,6 +55,8 @@ import random
 import re
 import subprocess
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -780,3 +782,250 @@ for n_out in (5, 15):
     assert n == backbone_params + DENSENET_FEATURES * n_out + n_out, (n_out, n)
 print(f"model ok: {count_trainable_params(model):,} trainable parameters with a 5-output head")
 del model, same, other
+
+# %% [markdown]
+# ## 2.2 Policy registry
+#
+# Each policy is one entry: the size of the head, the training loss, how logits become a
+# probability per pathology, and how the raw validation labels are resolved for model
+# selection. Everything else (backbone, data, optimiser, schedule) is shared.
+#
+# | Policy | Uncertain label u in training | Loss | Validation labels |
+# |---|---|---|---|
+# | `u_zeros` | 0 | BCE | u -> 0 |
+# | `u_ones` | 1 | BCE | u -> 1 |
+# | `u_ignore` | left out | masked BCE | u excluded |
+# | `u_multiclass` | third class | 3-way cross-entropy per pathology | u excluded |
+# | `u_ones_lsr` | fresh Uniform(0.55, 0.85) draw each step | BCE with soft targets | u -> 1 |
+# | `u_zeros_mc` | 0, dropout 0.3 before the head | BCE | u -> 0 |
+# | `u_zeros_posw` (extra) | 0, positive-class weights | weighted BCE | u -> 0 |
+#
+# Losses are computed in float32 even under mixed precision. The masked loss averages over the
+# entries that are kept, so a batch whose labels are all uncertain contributes 0, not NaN.
+# U-MultiClass encodes negative, positive and uncertain as classes 0, 1 and 2; its score is
+# softmax P(positive). `certain_labels` (u excluded) is the policy-independent view used for
+# the certain-only validation AUROC that every run logs.
+
+# %%
+N_PATH = len(PATHOLOGIES)
+
+
+def binary_targets(y: torch.Tensor, uncertain_as: float) -> torch.Tensor:
+    """Float targets from raw labels: 1 positive, 0 negative, ``uncertain_as`` for -1."""
+    return torch.where(y == -1, uncertain_as, (y == 1).float())
+
+
+def lsr_targets(y: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    """U-Ones + LSR targets: a fresh Uniform(lo, hi) draw for every uncertain entry."""
+    lo, hi = CONFIG["lsr_range"]
+    draws = torch.empty(y.shape).uniform_(lo, hi, generator=generator).to(y.device)
+    return torch.where(y == -1, draws, (y == 1).float())
+
+
+def multiclass_classes(y: torch.Tensor) -> torch.Tensor:
+    """U-MultiClass class index per entry: negative 0, positive 1, uncertain 2."""
+    return torch.where(y == -1, 2, y).long()
+
+
+def bce(logits: torch.Tensor, targets: torch.Tensor, pos_weight: torch.Tensor | None = None):
+    """Mean binary cross-entropy with logits, in float32."""
+    return F.binary_cross_entropy_with_logits(logits.float(), targets, pos_weight=pos_weight)
+
+
+def masked_bce(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """BCE over certain entries only: summed loss / max(number kept, 1)."""
+    keep = (y != -1).float()
+    per_entry = F.binary_cross_entropy_with_logits(
+        logits.float(), (y == 1).float(), reduction="none"
+    )
+    return (per_entry * keep).sum() / keep.sum().clamp(min=1)
+
+
+def multiclass_ce(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """3-way cross-entropy per pathology on (B, 15) logits, averaged over all entries."""
+    return F.cross_entropy(logits.float().reshape(-1, 3), multiclass_classes(y).reshape(-1))
+
+
+def multiclass_probs(logits: torch.Tensor) -> torch.Tensor:
+    """Softmax over the 3 classes of each pathology, (B, 5, 3)."""
+    return torch.softmax(logits.float().reshape(-1, N_PATH, 3), dim=-1)
+
+
+def multiclass_renormalised(logits: torch.Tensor) -> torch.Tensor:
+    """Alternative U-MultiClass score P(pos) / (P(pos) + P(neg)), (B, 5)."""
+    probs = multiclass_probs(logits)
+    return probs[..., 1] / (probs[..., 0] + probs[..., 1])
+
+
+def resolve(uncertain_as: float):
+    """Validation-label rule mapping raw -1 to ``uncertain_as`` (NaN means excluded)."""
+    return lambda y: np.where(y == -1, uncertain_as, y).astype(np.float64)
+
+
+certain_labels = resolve(np.nan)
+
+# Positive-class weights for the extra experiment: n_neg / n_pos on the training split, u -> 0.
+train_positive = (label_matrix(TRAIN) == 1).sum(axis=0)
+POS_WEIGHT = torch.tensor((len(TRAIN) - train_positive) / train_positive, dtype=torch.float32)
+
+
+@dataclass(frozen=True)
+class Policy:
+    """One uncertainty policy: head size, loss, score and validation-label rule."""
+
+    name: str
+    n_outputs: int
+    loss: Callable[[torch.Tensor, torch.Tensor, torch.Generator], torch.Tensor]
+    score: Callable[[torch.Tensor], torch.Tensor]
+    val_labels: Callable[[np.ndarray], np.ndarray]
+    dropout_p: float = 0.0
+    mc: bool = False
+    extra: bool = False
+
+    @property
+    def cam_rows(self) -> list[int]:
+        """Head rows whose CAMs are shown: the positive class of each pathology."""
+        return (
+            [3 * j + 1 for j in range(N_PATH)] if self.n_outputs == 3 * N_PATH else [*range(N_PATH)]
+        )
+
+
+def sigmoid_score(logits: torch.Tensor) -> torch.Tensor:
+    """Per-pathology probability from (B, 5) logits."""
+    return torch.sigmoid(logits.float())
+
+
+def zeros_loss(logits: torch.Tensor, y: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    """U-Zeros loss (also used by the MC Dropout variant): BCE with u -> 0."""
+    return bce(logits, binary_targets(y, 0.0))
+
+
+POLICIES = {
+    p.name: p
+    for p in [
+        Policy(
+            name="u_zeros",
+            n_outputs=N_PATH,
+            loss=zeros_loss,
+            score=sigmoid_score,
+            val_labels=resolve(0),
+        ),
+        Policy(
+            name="u_ones",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, binary_targets(y, 1.0)),
+            score=sigmoid_score,
+            val_labels=resolve(1),
+        ),
+        Policy(
+            name="u_ignore",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: masked_bce(z, y),
+            score=sigmoid_score,
+            val_labels=certain_labels,
+        ),
+        Policy(
+            name="u_multiclass",
+            n_outputs=3 * N_PATH,
+            loss=lambda z, y, g: multiclass_ce(z, y),
+            score=lambda z: multiclass_probs(z)[..., 1],
+            val_labels=certain_labels,
+        ),
+        Policy(
+            name="u_ones_lsr",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, lsr_targets(y, g)),
+            score=sigmoid_score,
+            val_labels=resolve(1),
+        ),
+        Policy(
+            name="u_zeros_mc",
+            n_outputs=N_PATH,
+            loss=zeros_loss,
+            score=sigmoid_score,
+            val_labels=resolve(0),
+            dropout_p=CONFIG["mc_dropout_p"],
+            mc=True,
+        ),
+        Policy(
+            name="u_zeros_posw",
+            n_outputs=N_PATH,
+            loss=lambda z, y, g: bce(z, binary_targets(y, 0.0), POS_WEIGHT.to(z.device)),
+            score=sigmoid_score,
+            val_labels=resolve(0),
+            extra=True,
+        ),
+    ]
+}
+MAIN_POLICIES = [name for name, p in POLICIES.items() if not p.extra]
+assert POLICY in POLICIES, f"POLICY must be one of {list(POLICIES)}, got {POLICY!r}"
+
+print(f"policy {POLICY!r} selected; positive-class weights {np.round(POS_WEIGHT.numpy(), 2)}")
+
+# Hand-computed checks on a 2 x 5 example; the expected values use NumPy formulas, not torch.
+y_ex = torch.tensor([[1, 0, -1, -1, 1], [0, -1, 1, 0, -1]], dtype=torch.int8)
+z_ex = torch.tensor([[2.0, -1.0, 0.5, -0.5, 0.0], [1.0, 0.3, -2.0, 0.7, -1.5]])
+z_np, y_np = z_ex.numpy().astype(np.float64), y_ex.numpy()
+
+
+def np_bce(z: np.ndarray, t: np.ndarray, w: np.ndarray | float = 1.0) -> np.ndarray:
+    """Per-entry BCE with logits, positive term weighted by ``w`` (NumPy reference)."""
+    log_sig, log_one_minus = -np.logaddexp(0, -z), -np.logaddexp(0, z)
+    return -(w * t * log_sig + (1 - t) * log_one_minus)
+
+
+def check(name: str, expected: float, generator: torch.Generator | None = None, z=z_ex) -> None:
+    """Assert that policy ``name``'s loss on the example equals ``expected``."""
+    got = POLICIES[name].loss(z, y_ex, generator).item()
+    assert abs(got - expected) < 1e-5, f"{name}: loss {got:.6f}, expected {expected:.6f}"
+
+
+positive, negative, uncertain = y_np == 1, y_np == 0, y_np == -1
+check("u_zeros", np_bce(z_np, positive).mean())
+check("u_zeros_mc", np_bce(z_np, positive).mean())
+check("u_ones", np_bce(z_np, ~negative).mean())
+check("u_ignore", np_bce(z_np, positive)[~uncertain].mean())
+pw = POS_WEIGHT.numpy().astype(np.float64)
+check("u_zeros_posw", np_bce(z_np, positive, pw).mean())
+
+lsr_draw = lsr_targets(y_ex, torch.Generator().manual_seed(0)).numpy()
+lo, hi = CONFIG["lsr_range"]
+assert ((lsr_draw[uncertain] >= lo) & (lsr_draw[uncertain] <= hi)).all(), "LSR target out of range"
+assert (lsr_draw[~uncertain] == positive[~uncertain]).all(), "LSR changed a certain label"
+check("u_ones_lsr", np_bce(z_np, lsr_draw).mean(), torch.Generator().manual_seed(0))
+second_draw = lsr_targets(y_ex, torch.Generator().manual_seed(1)).numpy()
+assert not np.allclose(lsr_draw[uncertain], second_draw[uncertain]), "LSR draws must vary"
+
+expected_classes = [[1, 0, 2, 2, 1], [0, 2, 1, 0, 2]]
+assert multiclass_classes(y_ex).tolist() == expected_classes, "U-MultiClass must map -1 to class 2"
+z15 = torch.linspace(-1.5, 1.5, 30).reshape(2, 15)
+z15_np = z15.numpy().astype(np.float64).reshape(2, N_PATH, 3)
+log_softmax = z15_np - np.log(np.exp(z15_np).sum(axis=-1, keepdims=True))
+classes = np.where(uncertain, 2, y_np)
+expected_ce = -np.take_along_axis(log_softmax, classes[..., None], axis=-1).mean()
+check("u_multiclass", expected_ce, z=z15)
+probs = np.exp(log_softmax)
+assert np.allclose(POLICIES["u_multiclass"].score(z15).numpy(), probs[..., 1], atol=1e-6)
+renorm = probs[..., 1] / (probs[..., 0] + probs[..., 1])
+assert np.allclose(multiclass_renormalised(z15).numpy(), renorm, atol=1e-6)
+
+all_uncertain = torch.full((2, N_PATH), -1, dtype=torch.int8)
+z_grad = z_ex.clone().requires_grad_(True)
+loss = POLICIES["u_ignore"].loss(z_grad, all_uncertain, None)
+loss.backward()
+assert loss.item() == 0.0 and torch.isfinite(z_grad.grad).all(), "all-uncertain batch must give 0"
+
+for name, policy in POLICIES.items():
+    logits = (z15 if policy.n_outputs == 3 * N_PATH else z_ex).clone().requires_grad_(True)
+    policy.loss(logits, y_ex, torch.Generator().manual_seed(0)).backward()
+    assert torch.isfinite(logits.grad).all(), f"{name}: non-finite gradient"
+    scores = policy.score(logits.detach())
+    assert scores.shape == (2, N_PATH) and ((scores >= 0) & (scores <= 1)).all(), name
+    assert len(policy.cam_rows) == N_PATH and max(policy.cam_rows) < policy.n_outputs, name
+
+assert np.array_equal(POLICIES["u_zeros"].val_labels(y_np), np.where(uncertain, 0, y_np))
+assert np.array_equal(POLICIES["u_ones_lsr"].val_labels(y_np), np.where(uncertain, 1, y_np))
+assert np.isnan(POLICIES["u_multiclass"].val_labels(y_np)[uncertain]).all()
+assert np.isfinite(POS_WEIGHT.numpy()).all() and (POS_WEIGHT > 0).all(), "bad positive weights"
+assert len(MAIN_POLICIES) == 6
+print(f"policies ok: {', '.join(POLICIES)}")
