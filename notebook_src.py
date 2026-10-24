@@ -482,3 +482,60 @@ ax.spines[["top", "right"]].set_visible(False)
 fig.tight_layout()
 save_figure(fig, "uncertain_prevalence")
 show_figure(fig)
+
+# %% [markdown]
+# ## 1.4 Fixed qualitative image lists
+#
+# The qualitative section compares all policies on the *same* images, so the image list is
+# fixed before any training: every test image, plus 600 internal-validation images that
+# include at least 50 uncertain-labelled images per pathology (topped up with random images).
+# Like the split, `qual/qual_ids.csv` is created once outside Kaggle, committed, and only read
+# by runs.
+
+# %%
+QUAL_PATH = REPO_DIR / "qual" / "qual_ids.csv"
+
+
+def make_qual_csv(val: pd.DataFrame, test: pd.DataFrame) -> str:
+    """Qualitative image list as CSV text (path, split, group), sorted by path."""
+    rng = np.random.default_rng(CONFIG["split_seed"])
+    n_total, n_min = CONFIG["qual_val_images"], CONFIG["qual_min_uncertain"]
+    group = {}
+    for p in PATHOLOGIES:
+        uncertain = val["path"][val[p] == -1]
+        have = sum(1 for path in uncertain if path in group)
+        pool = np.array(sorted(set(uncertain) - set(group)))
+        assert have + len(pool) >= n_min, f"internal val has under {n_min} uncertain {p} images"
+        for path in rng.choice(pool, size=max(n_min - have, 0), replace=False):
+            group[path] = f"uncertain {p}"
+    rest = np.array(sorted(set(val["path"]) - set(group)))
+    for path in rng.choice(rest, size=n_total - len(group), replace=False):
+        group[path] = "random"
+    rows = [{"path": p, "split": "val", "group": g} for p, g in group.items()]
+    rows += [{"path": p, "split": "test", "group": "all test"} for p in test["path"]]
+    table = pd.DataFrame(rows).sort_values("path", ignore_index=True)
+    return table.to_csv(index=False, lineterminator="\n")
+
+
+expected_qual = make_qual_csv(VAL, TEST)
+if QUAL_PATH.is_file():
+    if QUAL_PATH.read_text() != expected_qual:
+        print("warning: regenerating the qualitative list differs; using the committed one")
+elif IS_KAGGLE:
+    raise FileNotFoundError(
+        f"{QUAL_PATH.relative_to(REPO_DIR)} is missing at {REPO_REF}. The builder creates it once "
+        "outside Kaggle and commits it before tagging; never create it in a run."
+    )
+else:
+    QUAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    QUAL_PATH.write_text(expected_qual)
+    print(f"created {QUAL_PATH} (commit it before tagging the code version)")
+
+QUAL_IDS = pd.read_csv(QUAL_PATH)
+qual_val = VAL[VAL["path"].isin(QUAL_IDS.query("split == 'val'")["path"])]
+assert len(qual_val) == CONFIG["qual_val_images"], "qualitative val images not all in VAL"
+assert set(QUAL_IDS.query("split == 'test'")["path"]) == set(TEST["path"])
+qual_uncertain = (qual_val[PATHOLOGIES] == -1).sum()
+assert (qual_uncertain >= CONFIG["qual_min_uncertain"]).all(), qual_uncertain.to_dict()
+print(f"qualitative list: {len(qual_val)} val + {len(TEST)} test images")
+print("uncertain per pathology in the val subset:", qual_uncertain.to_dict())
