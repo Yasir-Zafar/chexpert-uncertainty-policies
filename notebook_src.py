@@ -63,7 +63,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import torchvision
+from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler
 from torchvision.transforms import v2 as T
 
@@ -688,3 +690,92 @@ assert not torch.equal(first_batch(other_seed)[0], xa), "another seed must chang
 batch = to_model_input(xa, torch.device("cpu"))
 assert batch.shape == (len(xa), 3, size, size) and batch.dtype == torch.float32
 print(f"loader ok: batch {tuple(batch.shape)}, order and augmentation reproducible per seed")
+
+# %% [markdown]
+# # Part 2: Model, policies and metrics
+#
+# ## 2.1 Model
+#
+# DenseNet-121 with ImageNet weights, every layer trainable. The model is split into
+# `extract_features` (the final ReLU feature map, globally average-pooled to 1024 values) and
+# `classify` (optional dropout, then one linear layer with 5 outputs, or 15 for U-MultiClass).
+# The split lets MC Dropout compute the backbone once and repeat only the cheap head.
+#
+# `cam` returns class activation maps: the head weights for the chosen output rows applied to
+# the final 10 x 10 feature map (plus the bias), so the spatial mean of a map equals the logit.
+# The head is initialised from the run seed alone, so it does not depend on how much random
+# state earlier cells used.
+
+# %%
+DENSENET_FEATURES = 1024
+
+
+class DenseNetClassifier(nn.Module):
+    """ImageNet DenseNet-121 backbone, optional dropout and a linear head."""
+
+    def __init__(
+        self, n_outputs: int, dropout_p: float, seed: int, pretrained: bool = True
+    ) -> None:
+        super().__init__()
+        weights = torchvision.models.DenseNet121_Weights.IMAGENET1K_V1 if pretrained else None
+        self.features = torchvision.models.densenet121(weights=weights).features
+        self.dropout = nn.Dropout(dropout_p) if dropout_p > 0 else nn.Identity()
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.head = nn.Linear(DENSENET_FEATURES, n_outputs)
+
+    def feature_map(self, x: torch.Tensor) -> torch.Tensor:
+        """Final ReLU feature map, (B, 1024, h, w); 10 x 10 for a 320 x 320 input."""
+        return F.relu(self.features(x))
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Global-average-pooled backbone features, (B, 1024)."""
+        return self.feature_map(x).mean(dim=(2, 3))
+
+    def classify(self, features: torch.Tensor) -> torch.Tensor:
+        """Logits from pooled features: dropout (if any), then the linear head."""
+        return self.head(self.dropout(features))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.classify(self.extract_features(x))
+
+    @torch.no_grad()
+    def cam(self, x: torch.Tensor, rows: list[int]) -> torch.Tensor:
+        """Class activation maps for head outputs ``rows``, (B, len(rows), h, w)."""
+        fmap = self.feature_map(x)
+        weight, bias = self.head.weight[rows], self.head.bias[rows]
+        return torch.einsum("kc,bchw->bkhw", weight, fmap) + bias.view(1, -1, 1, 1)
+
+
+def count_trainable_params(model: nn.Module) -> int:
+    """Number of trainable parameters."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# Sanity checks without downloading weights (random backbone, one 320 x 320 batch of two).
+probe_x = torch.randn(2, 3, CONFIG["image_size"], CONFIG["image_size"])
+model = DenseNetClassifier(5, dropout_p=0.3, seed=SEED, pretrained=False).eval()
+with torch.no_grad():
+    feats = model.extract_features(probe_x)
+    logits = model(probe_x)
+    assert feats.shape == (2, DENSENET_FEATURES) and logits.shape == (2, 5)
+    assert torch.allclose(logits, model.classify(feats)), "forward != classify(extract_features)"
+    maps = model.cam(probe_x, rows=[0, 3])
+    assert maps.shape == (2, 2, 10, 10), maps.shape
+    assert torch.allclose(maps.mean(dim=(2, 3)), logits[:, [0, 3]], atol=1e-4), "CAM mean != logit"
+    model.train()
+    assert not torch.equal(model.classify(feats), model.classify(feats)), "dropout inactive"
+    model.eval()
+    assert torch.equal(model.classify(feats), model.classify(feats)), "dropout active in eval"
+
+same = DenseNetClassifier(5, dropout_p=0.0, seed=SEED, pretrained=False)
+assert torch.equal(same.head.weight, model.head.weight), "head init must depend only on the seed"
+other = DenseNetClassifier(5, dropout_p=0.0, seed=other_seed, pretrained=False)
+assert not torch.equal(other.head.weight, model.head.weight), "head init must change with seed"
+
+backbone_params = 6_953_856  # torchvision DenseNet-121 without its 1000-class classifier
+for n_out in (5, 15):
+    n = count_trainable_params(DenseNetClassifier(n_out, 0.0, SEED, pretrained=False))
+    assert n == backbone_params + DENSENET_FEATURES * n_out + n_out, (n_out, n)
+print(f"model ok: {count_trainable_params(model):,} trainable parameters with a 5-output head")
+del model, same, other
