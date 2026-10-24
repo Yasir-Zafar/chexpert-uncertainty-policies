@@ -23,3 +23,13 @@ hooktest:
 	if pre-commit run no-github-tokens --files $$tmp/leak.txt >/dev/null 2>&1; then \
 		echo "hooktest FAILED: fake token was not blocked"; rm -rf $$tmp; exit 1; \
 	else echo "hooktest ok: fake token blocked"; rm -rf $$tmp; fi
+
+FAKE_ROOT := fake_data/chexpert
+
+.PHONY: fake
+
+fake: $(FAKE_ROOT)/train.csv
+
+$(FAKE_ROOT)/train.csv: tools/fake_chexpert.py
+	rm -rf $(FAKE_ROOT)
+	$(PY) tools/fake_chexpert.py --out $(FAKE_ROOT)
