@@ -58,6 +58,7 @@ from pathlib import Path
 
 import cv2
 import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -392,3 +393,92 @@ assert abs(val_share - CONFIG["val_fraction"]) <= 0.005, f"validation share {val
 for name, frame in [("analysis train", TRAIN), ("internal val", VAL), ("test", TEST)]:
     print(f"{name:15s} {len(frame):>7,} images {frame['patient_id'].nunique():>6,} patients")
 print(f"validation share {val_share:.2%}; split sha256 {SPLIT_SHA256}")
+
+# %% [markdown]
+# ## 1.3 Dataset statistics
+#
+# Label counts per pathology for the full (frontal AP/PA) training data, the analysis train and
+# internal validation splits, and the test set, plus images and patients per split. The
+# uncertain share in the analysis split is the prevalence used by experiment E4.
+#
+# Tables are written as CSV and LaTeX (`booktabs`), figures as vector PDF plus 300 dpi PNG at
+# IEEE single-column (3.5 in) or double-column (7.16 in) width.
+
+# %%
+COLUMN_WIDTH_IN, PAGE_WIDTH_IN = 3.5, 7.16
+
+
+def save_table(df: pd.DataFrame, name: str, float_format: str = "%.1f") -> None:
+    """Write ``df`` to ``results/tables/<name>.csv`` and ``.tex`` (booktabs)."""
+    df.to_csv(TABLES_DIR / f"{name}.csv", index=False)
+    latex = df.to_latex(index=False, escape=True, float_format=lambda x: float_format % x)
+    (TABLES_DIR / f"{name}.tex").write_text(latex)
+
+
+def save_figure(fig: plt.Figure, name: str) -> None:
+    """Write ``fig`` to ``results/figures/<name>.pdf`` and a 300 dpi ``.png``."""
+    fig.savefig(FIGURES_DIR / f"{name}.pdf", bbox_inches="tight")
+    fig.savefig(FIGURES_DIR / f"{name}.png", dpi=300, bbox_inches="tight")
+
+
+def show_figure(fig: plt.Figure) -> None:
+    """Display ``fig`` inline (skipped when running headless as a script), then close it."""
+    if matplotlib.get_backend().lower() != "agg":
+        plt.show()
+    plt.close(fig)
+
+
+def label_counts(df: pd.DataFrame, split: str) -> pd.DataFrame:
+    """Positive / negative / uncertain / not-mentioned counts per pathology for one split."""
+    rows = []
+    for p in PATHOLOGIES:
+        values = df[p]
+        n_unc = int((values == -1).sum())
+        rows.append(
+            {
+                "split": split,
+                "pathology": p,
+                "positive": int((values == 1).sum()),
+                "negative": int((values == 0).sum()),
+                "uncertain": n_unc,
+                "not_mentioned": int(values.isna().sum()),
+                "uncertain_pct": 100 * n_unc / len(df),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+SPLITS = {"full train": TRAIN_ALL, "analysis train": TRAIN, "internal val": VAL, "test": TEST}
+dataset_stats = pd.concat([label_counts(df, name) for name, df in SPLITS.items()])
+dataset_splits = pd.DataFrame(
+    [
+        {
+            "split": name,
+            "images": len(df),
+            "studies": df["study_id"].nunique(),
+            "patients": df["patient_id"].nunique(),
+        }
+        for name, df in SPLITS.items()
+    ]
+)
+counted = dataset_stats[["positive", "negative", "uncertain", "not_mentioned"]].sum(axis=1)
+assert (counted.to_numpy() == np.repeat([len(df) for df in SPLITS.values()], 5)).all()
+assert (dataset_stats.query("split == 'test'")[["uncertain", "not_mentioned"]] == 0).all().all()
+
+save_table(dataset_stats, "dataset_stats")
+save_table(dataset_splits, "dataset_splits")
+print(dataset_splits.to_string(index=False))
+print(dataset_stats.to_string(index=False, float_format="%.1f"))
+
+analysis_stats = dataset_stats[dataset_stats["split"] == "analysis train"]
+UNCERTAIN_PREVALENCE = analysis_stats.set_index("pathology")["uncertain_pct"]
+fig, ax = plt.subplots(figsize=(COLUMN_WIDTH_IN, 1.8))
+bars = ax.barh(PATHOLOGIES[::-1], UNCERTAIN_PREVALENCE[PATHOLOGIES[::-1]], color="0.35")
+ax.bar_label(bars, fmt="%.1f%%", padding=2, fontsize=7)
+ax.set_xlabel("Uncertain labels (% of images)", fontsize=8)
+ax.set_xlim(0, UNCERTAIN_PREVALENCE.max() * 1.25)
+ax.tick_params(labelsize=7)
+ax.spines[["top", "right"]].set_visible(False)
+fig.tight_layout()
+save_figure(fig, "uncertain_prevalence")
+show_figure(fig)
