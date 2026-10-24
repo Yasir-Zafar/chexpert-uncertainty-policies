@@ -72,6 +72,30 @@ Discussion, limitations, conclusion and LaTeX quality are your paper. The notebo
 
 ---
 
+## 1a. Technique scope (course CS-4045 outline is the limit)
+
+Every learning technique in the notebook must come from the course outline (Deep Learning for Perception, Fall 2025) or be committed in the approved proposal. Statistics and engineering are allowed only where they serve evaluation or running the experiment, and are kept to what the proposal names.
+
+| Technique | Where it comes from |
+|---|---|
+| CNN backbone (DenseNet-121), global average pooling, linear head | Weeks 3-4: CNNs and CNN architectures |
+| ImageNet pretraining, full fine-tuning | Week 6: transfer learning |
+| Multi-label image classification (sigmoid outputs, per-pathology softmax for U-MultiClass) | Week 6: image classification; week 2: MLP outputs |
+| BCE, masked BCE, BCE with soft targets (label smoothing), cross-entropy, positive-class weights | Week 5: loss functions; proposal Table II/III |
+| AdamW, weight decay, reduce-on-plateau learning rate, early stopping | Week 5: optimizers; proposal Table III |
+| Dropout; MC Dropout (dropout kept on at inference, 20 passes, predictive entropy) | Weeks 2-4 (dropout); MC inference is proposal objective 4 |
+| Data augmentation (rotation, resized crop, brightness/contrast) | Weeks 3-6 practice; proposal Section III-C |
+| Class activation maps from the GAP head | Weeks 3-4 (GAP architectures); qualitative evaluation only |
+| AUROC, AUPRC, F1 at Youden threshold, ECE, Brier, entropy | Week 1 ML recap (evaluation); proposal Section III-E |
+| Patient-level bootstrap CIs, paired bootstrap test against U-Zeros | Proposal Section III-E |
+| Mixed precision (FP16) | Proposal Table III (engineering, not a learning technique) |
+
+**Out of scope, not used:** detection (YOLO), segmentation (U-Net), vision transformers, generative models, federated learning, multimodal (report text) models, U-SelfTrained / pseudo-labelling, ensembling, test-time augmentation, multiple-comparison corrections (Holm), rank tests (Mann-Whitney U), mutual-information decomposition of MC uncertainty.
+
+Speed settings (`channels_last`, `cudnn_benchmark`), the FLOP counter, GPU monitoring and the profiler are tooling for running and costing the experiment; they do not change what is learned.
+
+---
+
 ## 2. Design
 
 **One master notebook, `chexpert_uncertainty.ipynb`, two modes.**
@@ -138,6 +162,7 @@ CONFIG = {
     "seeds": (42, 43, 44),
     "batch_size": 32,
     "max_epochs": 10,
+    "optimizer": "AdamW",
     "lr": 1e-4,
     "betas": (0.9, 0.999),
     "weight_decay": 1e-5,
@@ -177,7 +202,7 @@ Not in CONFIG, by design: head, loss, dropout and MC settings live in the policy
 | Entropy analysis | the test set has no uncertain labels, so predictive entropy is compared on the internal validation split (which keeps -1): certain-negative, certain-positive, uncertain |
 | MC variant | also evaluated with dropout off, to separate the effect of training with dropout from the effect of MC inference |
 | Bootstrap | patient-level resampling (image rows grouped by patient), one set of resample indices reused for every policy and metric so comparisons are paired |
-| Paired p-value | p = min(1, 2 * min((1 + #{d <= 0}) / (B + 1), (1 + #{d >= 0}) / (B + 1))) with d the paired difference. Holm correction is the default for headline claims: within each row of T3 (the mean and each pathology), the five comparisons against U-Zeros form one family. Raw and Holm-adjusted p-values are both shown, next to the mean difference and its CI |
+| Paired p-value | p = min(1, 2 * min((1 + #{d <= 0}) / (B + 1), (1 + #{d >= 0}) / (B + 1))) with d the paired bootstrap difference, as in the proposal. No multiplicity correction (outside the course scope); the paper states that the five comparisons per row are not corrected and reads p-values together with the CIs |
 | ECE | 10 equal-width bins on the positive-class probability |
 | F1 threshold | Youden's J chosen on the internal validation predictions, per pathology, with the validation labels above |
 | Resize | direct to 320 x 320, no letterboxing |
@@ -210,7 +235,7 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 **Part 2: model, policies, metrics**
 - **C9** DenseNet-121 (ImageNet weights, all layers trainable). `extract_features` (global-average-pooled 1024-d), `classify` (optional Dropout then `Linear(1024, 5)` or `Linear(1024, 15)`), `cam` (class activation maps: head weights times the final 10 x 10 ReLU feature map, no gradients; for U-MultiClass use the positive-class row of each pathology), `count_trainable_params`.
 - **C10** **Policy registry**, the "classifier cells". Six entries (plus a seventh, `u_zeros_posw`, flagged `extra` and excluded from the six-policy comparison), each with `head`, `loss(logits, y_raw, generator)`, `score(logits)`, `val_labels(y_raw)`, `dropout_p`, `mc`. Inline asserts: hand-computed losses on a 2 x 5 example for each policy, all-uncertain batch under U-Ignore is 0, LSR targets inside [0.55, 0.85], U-MultiClass encodes {0, 1, -1} as {0, 1, 2}. `u_zeros_posw` is `u_zeros` with BCE `pos_weight` = n_neg / n_pos per pathology, computed on the training split with uncertain labels resolved to 0 (assert: weights are finite and positive).
-- **C11** Metrics (pure NumPy): AUROC, AUPRC, Youden threshold, F1, ECE, Brier, binary entropy, mutual information, patient-level bootstrap with shared indices, paired difference with CI and p-value, and the Holm adjustment (asserted against a hand-worked example). Asserts against scikit-learn on random data and ECE = 0 on perfectly calibrated synthetic data.
+- **C11** Metrics (pure NumPy): AUROC, AUPRC, Youden threshold, F1, ECE, Brier, predictive (binary) entropy, patient-level bootstrap with shared indices, paired difference with CI and p-value. Asserts against scikit-learn on random data and ECE = 0 on perfectly calibrated synthetic data.
 
 **Part 3: training run (`MODE == "train"`)**
 - **C12** `train_one_epoch` (AMP, GradScaler, policy loss in float32, NaN/Inf guard that fails the run with the reason recorded), `evaluate` (validation mean AUROC with policy-resolved labels, plus certain-only AUROC), early stopping, plateau scheduler on validation mean AUROC, best-checkpoint restore. Early stopping and the scheduler follow the policy-resolved AUROC (the proposal's rule); the epoch with the best certain-only AUROC is also kept as a second checkpoint (`best_certain.pt`, the same file when the two epochs coincide). Records seconds per epoch, images per second and peak GPU memory. Monitoring is throttled so it never costs step time (section 11): one log line every `log_every` steps, gradient norm and loss scale to `grad_stats.csv` every `grad_stats_every` steps, and a background thread sampling `nvidia-smi` into `gpu_trace.csv`.
@@ -226,7 +251,7 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 - **C22** Qualitative section (below).
 - **C23** Training curves (with several seeds: mean line with a min-max band).
 - **C24** Export every table (CSV and LaTeX `booktabs`) and every figure (vector PDF plus 300 dpi PNG, single-column 3.5 in or double-column 7.16 in) to `results/`, and print an index of what was written.
-- **C25** Findings cell: best policy overall and per pathology, largest and smallest gains over U-Zeros, whether each CI excludes zero and whether the Holm-adjusted p-value is below 0.05, written out as sentences with numbers. With several seeds it also states whether the policy ranking is the same in every seed.
+- **C25** Findings cell: best policy overall and per pathology, largest and smallest gains over U-Zeros, whether each CI excludes zero and whether the paired bootstrap p-value is below 0.05, written out as sentences with numbers. With several seeds it also states whether the policy ranking is the same in every seed.
 
 ---
 
@@ -239,7 +264,7 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 | E3 | Beyond hard labels | Do label smoothing (U-Ones + LSR) and Bayesian uncertainty (U-Zeros + MC Dropout) help in the same protocol? | same tables, plus the MC dropout-off ablation (T6) and U-MultiClass score variants (T7) |
 | E4 | Generalisation across uncertain prevalence | Which policy gains most where uncertainty is common? | objective-5 table: per pathology, uncertain prevalence in the analysis split next to each policy's AUROC difference versus U-Zeros, ranking per pathology, scatter figure. Descriptive only, no correlation test |
 | E5 | Calibration | Which policy is best calibrated? | ECE and Brier table (T4), reliability diagrams |
-| E6 | Uncertainty signal | Is MC predictive entropy higher on uncertain-labelled studies? | entropy by group per pathology with CI and Mann-Whitney U, AUROC of entropy for uncertain versus certain, distribution figure |
+| E6 | Uncertainty signal | Is MC predictive entropy higher on uncertain-labelled studies? | mean entropy by group (certain-negative, certain-positive, uncertain) per pathology with bootstrap CIs, the uncertain-minus-certain gap with its CI, AUROC of entropy for uncertain versus certain, distribution figure |
 | E7 | Computational cost | What does each policy cost? | T5: trainable parameters, GPU, training time (total and per epoch), images per second, inference ms per image, peak GPU memory, GFLOPs per image, mean GPU utilisation, MC inference cost (head-only cached versus naive 20 passes) |
 | E8 | Class weighting (the extra experiment in Table III) | Does positive-class weighting help the baseline? | T10: `u_zeros_posw` next to `u_zeros` (all metrics with CIs, one paired difference with CI and p-value; a single comparison needs no multiplicity correction). Seed 42 only, reported separately from the six-policy comparison |
 
@@ -265,7 +290,7 @@ An optional literature reference row (published values from the cited paper, typ
 
 ## 6. What each run saves (`runs/<policy>_s<seed>/`, all small)
 
-`run_info.json` (policy, seed, `code_version`, CONFIG, split SHA-256, data fingerprint = SHA-256 over `train.csv` and `valid.csv`, who ran it, GPU name and count, torch and CUDA versions, status, best epoch, epochs run, stop reason, trainable parameters, training seconds, images per second, inference ms per image, peak GPU memory), `metrics_epoch.csv`, `grad_stats.csv`, `gpu_trace.csv`, `train.log`, `val_preds.npz`, `test_preds.npz` (row ids, patient ids, raw labels, scores, logits), `val_preds_certain.npz` and `test_preds_certain.npz` (same, from the certain-only checkpoint), `cam_test.npz`, `cam_val_subset.npz`, and for the MC run `mc_val.npz` and `mc_test.npz` (sample mean, entropy, mutual information, deterministic score). Test labels are read only after the best checkpoint is chosen, and only to predict.
+`run_info.json` (policy, seed, `code_version`, CONFIG, split SHA-256, data fingerprint = SHA-256 over `train.csv` and `valid.csv`, who ran it, GPU name and count, torch and CUDA versions, status, best epoch, epochs run, stop reason, trainable parameters, training seconds, images per second, inference ms per image, peak GPU memory), `metrics_epoch.csv`, `grad_stats.csv`, `gpu_trace.csv`, `train.log`, `val_preds.npz`, `test_preds.npz` (row ids, patient ids, raw labels, scores, logits), `val_preds_certain.npz` and `test_preds_certain.npz` (same, from the certain-only checkpoint), `cam_test.npz`, `cam_val_subset.npz`, and for the MC run `mc_val.npz` and `mc_test.npz` (sample mean, predictive entropy, deterministic score). Test labels are read only after the best checkpoint is chosen, and only to predict.
 
 ---
 
