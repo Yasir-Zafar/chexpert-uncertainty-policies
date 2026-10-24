@@ -78,6 +78,7 @@ CONFIG = {
     "seeds": (42, 43, 44),
     "batch_size": 32,
     "max_epochs": 10,
+    "optimizer": "AdamW",
     "lr": 1e-4,
     "betas": (0.9, 0.999),
     "weight_decay": 1e-5,
