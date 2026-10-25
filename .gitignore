@@ -35,3 +35,4 @@ result
 # Training outputs that stay local
 runs_smoke/
 checkpoints/
+fetched_runs/
