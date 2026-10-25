@@ -140,14 +140,34 @@ python tools/status.py        # one row per run branch: who, epoch, validation A
 
 It needs only git, reads the pushed epoch logs, and ignores smoke branches.
 
-## Results and submission
+## When all runs are done
 
-`MODE=results` runs on a Kaggle **CPU** session (no GPU quota) with the dataset attached. It
-fetches all runs from their branches, checks they used the same split, data, code version and
-settings, and builds the tables, figures and qualitative analysis. Because only the executed
-results notebook is submitted, it also shows the training record of every run (per-epoch tables,
-log excerpts, curves) rather than leaving it on GitHub. Tables go to `results/tables/` (CSV and
-LaTeX) and figures to `results/figures/` (PDF and PNG).
+Run branches are data, not code: **never merge them**, and ignore GitHub's "Compare & pull
+request" banner on them. Each holds one run's folder and nothing else, and `main` does not change
+when a run finishes. The results notebook reads the branches directly by name.
+
+1. Check that every expected run is `complete`: `python tools/status.py`, or the run inventory
+   that results mode prints first.
+2. Import the notebook once more and, in cell 0.1, change only `MODE` to `"results"` (keep
+   `SMOKE` at `"0"`: results mode reads the `run/...` branches, not the `smoke/...` ones).
+3. Settings: a **CPU** session (no GPU quota), Internet on, the same dataset attached (the image
+   galleries need it) and the three secrets attached.
+4. Save Version, then Save and Run All (Commit).
+
+Results mode lists every expected run in an inventory, stops with a list if one is missing or
+does not match the others (code version, settings, split, data, test images), and otherwise
+builds the tables, figures, qualitative analysis and findings. Because only the executed results
+notebook is submitted, it also shows the training record of every run (per-epoch tables, log
+excerpts, curves) rather than leaving it on GitHub.
+
+What to submit and keep:
+- **Submit** the executed results notebook (the code with all outputs), downloaded from the saved
+  version.
+- **For the paper**, take the tables (CSV and LaTeX) and figures (PDF and PNG) from the
+  notebook's output folder, `results/tables/` and `results/figures/`.
+- **Keep** the run branches and the `v1` tag as the record of the runs and the code. The
+  `results/` folder is ignored by git; add a final copy with `git add -f results` through a pull
+  request only if you want it in the repository.
 
 ## Local development
 
