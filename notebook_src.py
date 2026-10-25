@@ -50,6 +50,7 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 # %%
 import base64
 import hashlib
+import io
 import json
 import math
 import platform
@@ -58,11 +59,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -1680,7 +1682,8 @@ print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for ev
 
 # %%
 RUN_NAME = f"{POLICY}_s{SEED}"
-RUN_DIR = REPO_DIR / ("runs_smoke" if SMOKE else "runs") / RUN_NAME
+RUNS_SUBDIR = "runs_smoke" if SMOKE else "runs"
+RUN_DIR = REPO_DIR / RUNS_SUBDIR / RUN_NAME
 CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
 
 
@@ -1810,8 +1813,10 @@ LABEL_KEYS = {"label", "labels", "y", "y_raw", "y_true"}
 
 
 def save_npz(file: Path, /, **arrays: np.ndarray) -> None:
-    """Write arrays to a compressed .npz; refuses names that suggest CheXpert labels."""
+    """Write arrays to a compressed .npz; refuses labels and any array that needs pickling."""
     assert not LABEL_KEYS & set(arrays), f"{file.name}: labels must not be saved in run files"
+    objects = [name for name, a in arrays.items() if a.dtype == object]
+    assert not objects, f"{file.name}: {objects} would need pickle; use fixed-width strings"
     np.savez_compressed(file, **arrays)
 
 
@@ -1832,7 +1837,7 @@ def write_predictions(
     scores = scores_from_logits(policy, logits)
     save_npz(
         RUN_DIR / f"{split}_preds{suffix}.npz",
-        path=df["path"].to_numpy(),
+        path=df["path"].to_numpy(dtype=str),
         logits=logits,
         scores=scores,
     )
@@ -1881,7 +1886,7 @@ def mc_arrays(
     probs = mc_probabilities(model, features, policy.score, CONFIG["mc_passes"], SEED)
     mean = probs.mean(dim=0).cpu().numpy()
     return {
-        "path": df["path"].to_numpy(),
+        "path": df["path"].to_numpy(dtype=str),
         "mean": mean,
         "entropy": binary_entropy(mean.astype(np.float64)).astype(np.float32),
         "deterministic": deterministic,
@@ -1944,7 +1949,6 @@ def gflops_per_image(model: nn.Module) -> float:
 
 
 if MODE == "train":
-    ids_val, ids_test = val_df["path"].to_numpy(), TEST["path"].to_numpy()
     model.eval()
 
     # Primary checkpoint (best.pt): validation and test predictions.
@@ -1986,7 +1990,7 @@ if MODE == "train":
     for name, frame in [("test", TEST), ("val_subset", cam_val_df)]:
         maps = compute_cams(model, frame, policy.cam_rows)
         assert maps.shape == (len(frame), N_PATH, 10, 10) and np.isfinite(maps).all()
-        save_npz(RUN_DIR / f"cam_{name}.npz", path=frame["path"].to_numpy(), cam=maps)
+        save_npz(RUN_DIR / f"cam_{name}.npz", path=frame["path"].to_numpy(dtype=str), cam=maps)
 
     # Cost: inference time on a model-ready random batch, FLOPs and the MC head cost.
     batch = RUN_LIMITS["batch_size"]
@@ -2021,8 +2025,9 @@ if MODE == "train":
     written = {f.name for f in RUN_DIR.iterdir()}
     assert written == expected, f"unexpected run files: {written ^ expected}"
     for f in RUN_DIR.glob("*.npz"):
-        with np.load(f) as data:
-            assert not LABEL_KEYS & set(data.files), f"{f.name} contains labels"
+        with np.load(f) as data:  # reading every array proves none needs pickle
+            arrays = {name: data[name] for name in data.files}
+        assert not LABEL_KEYS & set(arrays), f"{f.name} contains labels"
     size_mb = sum(f.stat().st_size for f in RUN_DIR.iterdir()) / 1e6
     assert size_mb < 25, f"run folder is {size_mb:.1f} MB; it must stay small enough to push"
 
@@ -2056,3 +2061,261 @@ if MODE == "train":
         assert not any(name.endswith((".pt", ".pth", ".ckpt")) for name in pushed_names)
         print(f"pushed {len(pushed_names)} files to branch {pusher.branch} (commit {tip})")
         pusher.close()
+
+
+# %% [markdown]
+# # Part 4: Results (`MODE == "results"`)
+#
+# ## 4.1 Fetch the runs, inventory and consistency check
+#
+# Every run trained in its own notebook and pushed its folder to `run/<policy>_s<seed>`. This
+# part downloads those folders and lists every expected run in an **inventory**, with runs that
+# are not there (yet) shown as `missing`. Only a run that is `complete` and passes every check
+# below is used; any other run is listed with the reason. A run is comparable with the others
+# when it has
+#
+# - the same code version and the same frozen `CONFIG`,
+# - the same train/validation split and the same dataset files (their fingerprints),
+# - the same test images in the same order, and
+# - the policy and seed its branch name says, and all the files a run must write.
+#
+# `N_SEEDS` chooses how many seeds are analysed: `"1"` uses seed 42 only (the proposal's
+# protocol), `"2"` and `"3"` add seeds 43 and 44, and `"auto"` takes the largest number for
+# which every policy has finished every seed. An explicit number with runs missing stops here
+# with the list of what is missing, so a partial seed layer can never leak into the tables. The
+# extra class-weighting run (`u_zeros_posw`, seed 42) is loaded separately and is not part of
+# the six-policy comparison.
+
+# %%
+BRANCH_PREFIX = "smoke" if SMOKE else "run"
+FETCH_DIR = REPO_DIR / "fetched_runs"
+EXTRA_POLICY = next(name for name, policy_ in POLICIES.items() if policy_.extra)
+BASE_FILES = {
+    "run_info.json", "metrics_epoch.csv", "grad_stats.csv", "train.log",
+    "val_preds.npz", "test_preds.npz", "cam_test.npz", "cam_val_subset.npz",
+}  # fmt: skip
+
+
+@dataclass
+class Run:
+    """One run folder fetched from GitHub, with the reasons it cannot be used (if any)."""
+
+    policy: str
+    seed: int
+    dir: Path | None = None
+    info: dict = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return f"{self.policy}_s{self.seed}"
+
+    @property
+    def status(self) -> str:
+        """``missing`` without a branch, else the status the run itself recorded."""
+        return "missing" if self.dir is None else self.info.get("status", "unknown")
+
+    @property
+    def usable(self) -> bool:
+        return self.status == "complete" and not self.problems
+
+
+def fetch_runs(names: list[str], dest: Path) -> dict[str, Path]:
+    """Download the folders of the run branches that exist; return ``{run name: folder}``."""
+    remote = remote_url()
+    listing = run_git("ls-remote", "--heads", remote, f"refs/heads/{BRANCH_PREFIX}/*", auth=True)
+    on_remote = {line.split("refs/heads/")[1] for line in listing.splitlines()}
+    branches = [f"{BRANCH_PREFIX}/{n}" for n in names if f"{BRANCH_PREFIX}/{n}" in on_remote]
+    found: dict[str, Path] = {}
+    if not branches:
+        return found
+    with tempfile.TemporaryDirectory(prefix="fetch_") as tmp:
+        scratch = Path(tmp)
+        run_git("init", "-q", "--bare", str(scratch))
+        specs = [f"+refs/heads/{b}:refs/heads/{b}" for b in branches]
+        run_git("fetch", "-q", "--depth", "1", remote, *specs, cwd=scratch, auth=True)
+        for branch in branches:
+            name = branch.split("/", 1)[1]
+            archive = ["git", "archive", "--format=tar", branch, f"{RUNS_SUBDIR}/{name}"]
+            tarball = subprocess.run(archive, cwd=scratch, capture_output=True, check=True).stdout
+            shutil.rmtree(dest / RUNS_SUBDIR / name, ignore_errors=True)
+            with tarfile.open(fileobj=io.BytesIO(tarball)) as tar:
+                tar.extractall(dest, filter="data")
+            found[name] = dest / RUNS_SUBDIR / name
+    return found
+
+
+def load_run(policy: str, seed: int, folder: Path | None) -> Run:
+    """A ``Run`` with its ``run_info.json`` read (a missing or broken file is a problem)."""
+    run = Run(policy, seed, folder)
+    if folder is not None:
+        try:
+            run.info = json.loads((folder / "run_info.json").read_text())
+        except (OSError, json.JSONDecodeError) as err:
+            run.problems.append(f"run_info.json unreadable: {err}")
+    return run
+
+
+def expected_files(run: Run) -> set[str]:
+    """Files a complete run folder holds, which depend on the policy and on its checkpoints."""
+    files = set(BASE_FILES)
+    if run.info.get("certain_checkpoint_differs"):
+        files |= {"val_preds_certain.npz", "test_preds_certain.npz"}
+    if POLICIES[run.policy].mc:
+        files |= {"mc_val.npz", "mc_test.npz"}
+    if run.info.get("gpu_count"):
+        files.add("gpu_trace.csv")
+    return files
+
+
+def check_run(run: Run, test_paths: list[str]) -> list[str]:
+    """Reasons ``run`` cannot be combined with the others; empty when it is fine."""
+    info = run.info
+    if info.get("status") != "complete":
+        return []  # an unfinished run is not an error: its status column says it
+    version = CONFIG["code_version"]
+    checks = [
+        (
+            (info.get("policy"), info.get("seed")) == (run.policy, run.seed),
+            "policy or seed differs from the branch name",
+        ),
+        (info.get("code_version") == version, f"code version is not {version!r}"),
+        (info.get("config") == json.loads(json.dumps(CONFIG)), "CONFIG differs from this notebook"),
+        (SMOKE or info.get("run_limits") == RUN_LIMITS, "run limits differ from this notebook"),
+        (info.get("split_sha256") == SPLIT_SHA256, "different train/validation split"),
+        (info.get("data_fingerprint") == DATA_FINGERPRINT, "different dataset files"),
+        (info.get("smoke") == SMOKE, f"smoke flag is {info.get('smoke')}, notebook has {SMOKE}"),
+    ]
+    problems = [text for ok, text in checks if not ok]
+    present, expected = {f.name for f in run.dir.iterdir()}, expected_files(run)
+    if present != expected:
+        problems.append(f"files differ from the expected set: {sorted(present ^ expected)}")
+    elif list(np.load(run.dir / "test_preds.npz")["path"]) != test_paths:
+        problems.append("test images (or their order) differ from this notebook's test set")
+    return problems
+
+
+def describe(run: Run) -> str:
+    """``name: status`` followed by the run's problems, for error messages."""
+    return f"{run.name}: {run.status}" + "".join(f"; {text}" for text in run.problems)
+
+
+def choose_seeds(runs: dict[tuple[str, int], Run], n_seeds: str) -> list[int]:
+    """Seeds to analyse for ``N_SEEDS``; raises with the list of unusable runs if impossible."""
+    seeds = list(CONFIG["seeds"])
+    layer_ok = {s: all(runs[(p, s)].usable for p in MAIN_POLICIES) for s in seeds}
+    if n_seeds == "auto":
+        chosen = []
+        for seed in seeds:
+            if not layer_ok[seed]:
+                break
+            chosen.append(seed)
+        if not chosen:
+            raise RuntimeError(f"no complete layer: every policy at seed {seeds[0]} is needed")
+        return chosen
+    wanted = seeds[: int(n_seeds)]
+    unusable = [runs[(p, s)] for s in wanted for p in MAIN_POLICIES if not runs[(p, s)].usable]
+    if unusable:
+        lines = "\n  ".join(describe(run) for run in unusable)
+        raise RuntimeError(f"N_SEEDS={n_seeds} needs runs that are not usable:\n  {lines}")
+    return wanted
+
+
+def inventory_table(runs: list[Run], used: set[str]) -> pd.DataFrame:
+    """One row per expected run: who ran it, where, how far it got and whether it is analysed."""
+    rows = []
+    for run in runs:
+        info = run.info
+        limit = (info.get("run_limits") or {}).get("max_epochs", "?")
+        hours = info["train_seconds"] / 3600 if "train_seconds" in info else None
+        rows.append(
+            {
+                "run": run.name,
+                "who": info.get("run_by", "-"),
+                "status": run.status,
+                "gpu": info.get("gpu_name", "-"),
+                "epochs": f"{info['epochs_run']}/{limit}" if "epochs_run" in info else "-",
+                "best_epoch": info.get("best_epoch", "-"),
+                "train_hours": f"{hours:.2f}" if hours is not None else "-",
+                "used": "yes" if run.name in used else "no",
+                "problems": "; ".join(run.problems),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def protocol_table(runs: list[Run]) -> pd.DataFrame:
+    """Settings every analysed run shares (the protocol the paper states), plus the hardware."""
+    cfg, first = runs[0].info["config"], runs[0].info
+    size, val = cfg["image_size"], cfg["val_fraction"]
+    gpus = sorted({r.info["gpu_name"] for r in runs})
+    software = sorted({f"torch {r.info['torch']}, CUDA {r.info['cuda']}" for r in runs})
+    rows = {
+        "code version": cfg["code_version"],
+        "backbone": "DenseNet-121, ImageNet weights, all layers fine-tuned",
+        "input": f"{size} x {size}, grayscale copied to 3 channels, ImageNet normalisation",
+        "split": f"patient level, {1 - val:.0%} / {val:.0%}, seed {cfg['split_seed']}",
+        "optimiser": f"{cfg['optimizer']}, lr {cfg['lr']}, weight decay {cfg['weight_decay']}",
+        "schedule": (
+            f"lr x{cfg['plateau_factor']} after {cfg['plateau_patience']} epoch without gain, "
+            f"early stop after {cfg['early_stop_patience']}"
+        ),
+        "batch size / max epochs": f"{cfg['batch_size']} / {cfg['max_epochs']}",
+        "mixed precision": str(cfg["amp"]),
+        "augmentation": (
+            f"rotation {cfg['rotation_deg']} deg, crop scale {tuple(cfg['crop_scale'])}, "
+            f"jitter {cfg['jitter']}, no flip"
+        ),
+        "MC Dropout": f"p = {cfg['mc_dropout_p']}, {cfg['mc_passes']} passes",
+        "label smoothing range": str(tuple(cfg["lsr_range"])),
+        "bootstrap": f"{cfg['bootstrap_resamples']} patient-level resamples, 95% intervals",
+        "split SHA-256": first["split_sha256"][:16],
+        "data fingerprint": first["data_fingerprint"][:16],
+        "hardware": ", ".join(gpus),
+        "software": "; ".join(software),
+    }
+    return pd.DataFrame({"setting": list(rows), "value": list(rows.values())})
+
+
+if MODE == "results":
+    test_paths = TEST["path"].tolist()
+    expected_runs = [(p, s) for s in CONFIG["seeds"] for p in MAIN_POLICIES] + [(EXTRA_POLICY, 42)]
+    fetched = fetch_runs([f"{p}_s{s}" for p, s in expected_runs], FETCH_DIR)
+    ALL_RUNS = {(p, s): load_run(p, s, fetched.get(f"{p}_s{s}")) for p, s in expected_runs}
+    for run in ALL_RUNS.values():
+        if run.dir is not None and not run.problems:
+            run.problems = check_run(run, test_paths)
+
+    try:
+        RESULT_SEEDS = choose_seeds(ALL_RUNS, N_SEEDS)
+        failure = None
+    except RuntimeError as err:
+        RESULT_SEEDS, failure = [], err
+    RUNS = {(p, s): ALL_RUNS[(p, s)] for s in RESULT_SEEDS for p in MAIN_POLICIES}
+    EXTRA_RUN = ALL_RUNS[(EXTRA_POLICY, 42)]
+    if not EXTRA_RUN.usable:
+        EXTRA_RUN = None
+
+    shown = CONFIG["seeds"] if N_SEEDS == "auto" else CONFIG["seeds"][: int(N_SEEDS)]
+    shown_runs = [ALL_RUNS[(p, s)] for s in shown for p in MAIN_POLICIES]
+    shown_runs.append(ALL_RUNS[(EXTRA_POLICY, 42)])
+    used = {r.name for r in RUNS.values()} | ({EXTRA_RUN.name} if EXTRA_RUN else set())
+    inventory = inventory_table(shown_runs, used)
+    print(inventory.drop(columns="problems").to_string(index=False))
+    for run in shown_runs:
+        if run.problems:
+            print(f"  {run.name}: {'; '.join(run.problems)}")
+    save_table(inventory, "run_inventory")
+    if failure is not None:
+        raise failure
+    if not EXTRA_RUN:
+        print(f"note: the extra run {EXTRA_POLICY}_s42 is not usable; E8 will be skipped")
+
+    gpu_names = {r.info["gpu_name"] for r in RUNS.values()}
+    if len(gpu_names) > 1:
+        print(f"warning: the runs used different GPUs: {sorted(gpu_names)}")
+    protocol = protocol_table(list(RUNS.values()))
+    save_table(protocol, "protocol")
+    print(protocol.to_string(index=False))
+    extra = "yes" if EXTRA_RUN else "no"
+    print(f"analysing seeds {RESULT_SEEDS}: {len(RUNS)} runs, extra run {extra}")
