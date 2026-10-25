@@ -373,17 +373,22 @@ class RunPusher:
             self.work = None
 
 
-def find_data_root() -> Path:
+def find_data_root(inputs: Path = Path("/kaggle/input")) -> Path:
     """Locate the folder holding CheXpert-small's ``train.csv`` and ``valid.csv``.
 
-    ``DATA_ROOT`` wins when set; on Kaggle the attached inputs are searched otherwise.
+    ``DATA_ROOT`` wins when set. On Kaggle the attached inputs are searched one directory level
+    at a time, down to four levels, stopping at the first level that holds the two files, so the
+    image folders (about 220,000 files) are never walked.
     """
     if os.environ.get("DATA_ROOT"):
         candidates = [Path(os.environ["DATA_ROOT"]).resolve()]
     elif IS_KAGGLE:
-        inputs = Path("/kaggle/input")
-        found = inputs.glob("**/train.csv")
-        candidates = sorted(p.parent for p in found if len(p.relative_to(inputs).parts) <= 5)
+        level, candidates = [inputs], []
+        for _ in range(5):
+            candidates = [d for d in level if (d / "train.csv").is_file()]
+            if candidates:
+                break
+            level = [child for d in level for child in sorted(d.iterdir()) if child.is_dir()]
     else:
         candidates = []
     roots = [c for c in candidates if (c / "train.csv").is_file() and (c / "valid.csv").is_file()]
