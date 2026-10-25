@@ -63,7 +63,7 @@ The assignment's final submission is **one notebook containing all the code from
 | Rubric item (points) | What earns it |
 |---|---|
 | Implementation and code quality (15) | One notebook that runs top to bottom in both modes from a clean session; markdown header per section; small functions with docstrings; one frozen CONFIG cell; inline sanity asserts; library versions printed; no dead code |
-| Experimental execution and completeness (10) | All six policies trained under one frozen protocol; a consistency cell proves identical split, data, code version and settings across runs; per-epoch logs for every run |
+| Experimental execution and completeness (10) | All six policies trained under one frozen protocol; a consistency cell proves identical split, data, code version and settings across runs; per-epoch logs for every run, shown in the submitted notebook itself (section 2, C23) |
 | Results and quantitative evaluation, tables (10) | Tables T1 to T7 with 95% CIs, paired differences against U-Zeros, objective-5 table, calibration, cost table; all exported as LaTeX and CSV |
 | Qualitative evaluation (10) | Example gallery, activation-map comparison across the six policies, behaviour on uncertain-labelled images, confusion matrices, failure cases |
 | Analysis and interpretation (5) | Plots chosen to answer "why" (uncertain-case behaviour, entropy), plus an auto-generated findings cell with the numbers the paper quotes |
@@ -105,7 +105,7 @@ Speed settings (`channels_last`, `cudnn_benchmark`), the FLOP counter, GPU monit
 | `train` | Kaggle GPU, once per policy | data prep, train one policy, save predictions and artifacts, push them to GitHub |
 | `results` | Kaggle CPU (no GPU quota) | data prep and stats, fetch the six runs from GitHub, all tables, figures, qualitative analysis, export |
 
-The file submitted is the executed `results` notebook: all code visible, outputs for E1 to E7 and the qualitative section. The six executed `train` notebooks stay on GitHub as the training logs.
+The file submitted is the executed `results` notebook, and it is the **only** thing graders see: all code visible, outputs for E1 to E7 and the qualitative section. Each run trains in its own notebook, so the submitted file never trains anything itself; it must instead carry the full training record of **all six runs** (and the extra one), rebuilt from the run folders pushed to GitHub (C16 inventory, C23 training record). The executed `train` notebooks stay on GitHub only as a backup.
 
 **Authoring.** Write `notebook_src.py` with `# %%` cell markers (jupytext) and generate the `.ipynb` from it. Plain text is easy to edit cell by cell, run as a script and lint. The generated `.ipynb` is what gets uploaded to Kaggle. The `.py` is the source of truth.
 
@@ -245,12 +245,12 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 - **C15** Push to `run/<policy>_s<seed>`.
 
 **Part 4: results (`MODE == "results"`)**
-- **C16** Fetch the runs for the seeds selected by `N_SEEDS` (six policies per seed); consistency check (same CONFIG, `code_version`, split hash, data fingerprint, test row order; seed is the only thing that may differ between runs of the same policy; same GPU name is a warning; every run `complete`). A seed counts only if all six policies have it complete; incomplete layers are listed and ignored. The extra run `u_zeros_posw`, if present, is loaded separately and held to the same CONFIG and `code_version`. Print the protocol table.
+- **C16** Fetch the runs for the seeds selected by `N_SEEDS` (six policies per seed); consistency check (same CONFIG, `code_version`, split hash, data fingerprint, test row order; seed is the only thing that may differ between runs of the same policy; same GPU name is a warning; every run `complete`). A seed counts only if all six policies have it complete; incomplete layers are listed and ignored. The extra run `u_zeros_posw`, if present, is loaded separately and held to the same CONFIG and `code_version`. Print the protocol table. The first output is a **run inventory** with one row per expected run (six policies per seed plus the extra run): who ran it, GPU, epochs, best epoch, wall-clock time and status, with absent runs shown as `missing`, so the submitted notebook documents that all six runs exist.
 - **C17** E1 to E3 quantitative tables and plots (below).
 - **C18** E4 objective-5 table and plot.
 - **C19** E5 calibration. **C20** E6 uncertainty analysis. **C21** E7 computational cost and the E8 class-weighting comparison (skipped with a message if the extra run is absent).
 - **C22** Qualitative section (below).
-- **C23** Training curves (with several seeds: mean line with a min-max band).
+- **C23** Training record of every run, so the submitted notebook alone shows how all six models were trained, built from the pushed `run_info.json`, `metrics_epoch.csv`, `train.log`, `grad_stats.csv` and `gpu_trace.csv`: for each policy (and `u_zeros_posw`) the full per-epoch table (train loss, validation AUROC with policy-resolved and certain-only labels, learning rate, seconds, images per second, peak memory), the first and last lines of its training log, a stop-reason line (best epoch, early stop or max epochs) and gradient-norm and GPU-utilisation summaries; then training curves of all runs on shared axes (with several seeds: mean line with a min-max band). Nothing is shown only for the run that happens to be selected in cell 1.
 - **C24** Export every table (CSV and LaTeX `booktabs`) and every figure (vector PDF plus 300 dpi PNG, single-column 3.5 in or double-column 7.16 in) to `results/`, and print an index of what was written.
 - **C25** Findings cell: best policy overall and per pathology, largest and smallest gains over U-Zeros, whether each CI excludes zero and whether the paired bootstrap p-value is below 0.05, written out as sentences with numbers. With several seeds it also states whether the policy ranking is the same in every seed.
 
