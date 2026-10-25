@@ -12,6 +12,13 @@ repos:
         entry: ruff format --check --force-exclude
         language: system
         types: [python]
+      - id: notebook-current
+        name: chexpert_uncertainty.ipynb matches notebook_src.py
+        # python3.13, not python: the nix pre-commit wrapper puts its own python 3.14 first on PATH.
+        entry: python3.13 tools/make_nb.py --check
+        language: system
+        pass_filenames: false
+        files: ^(notebook_src\.py|chexpert_uncertainty\.ipynb|tools/make_nb\.py)$
       - id: no-github-tokens
         name: block GitHub tokens
         # Real tokens only: a prefix followed by a long token body, so docs that name the prefix pass.
