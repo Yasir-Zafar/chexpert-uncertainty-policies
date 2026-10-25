@@ -64,6 +64,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1704,6 +1705,33 @@ RUN_DIR = REPO_DIR / RUNS_SUBDIR / RUN_NAME
 CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
 
 
+IO_THREADS = 64  # threads for the cache warm-up; speed only, never affects results
+
+
+def warm_file_cache(paths: list[Path], log: Callable[[str], None]) -> None:
+    """Read every file once so the operating system keeps it in memory for the epochs to come.
+
+    The first read of an image from Kaggle's dataset mount takes about 0.3 s, so four loader
+    workers manage only about 12 images/s, while a cached image costs almost nothing. Waiting
+    for storage uses no CPU, so many threads can overlap the waits: this pass reads in parallel
+    and discards the bytes. Training and its results are unchanged; it only moves the slow
+    first read out of the epoch loop.
+    """
+
+    def read(path: Path) -> int:
+        with open(path, "rb") as f:
+            return len(f.read())
+
+    start, total = time.perf_counter(), 0
+    with ThreadPoolExecutor(IO_THREADS) as pool:
+        for done, size in enumerate(pool.map(read, paths), start=1):
+            total += size
+            if done % 25_000 == 0 or done == len(paths):
+                speed = done / (time.perf_counter() - start)
+                progress = f"{done:,}/{len(paths):,} files, {total / 1e9:.1f} GB"
+                log(f"cache warm-up: {progress}, {speed:.0f} files/s")
+
+
 def environment_info() -> dict:
     """Hardware and library versions recorded with every run."""
     on_gpu = DEVICE.type == "cuda"
@@ -1765,6 +1793,8 @@ if MODE == "train":
     )
     pusher = RunPusher(RUN_DIR, REPO_DIR, SMOKE, RUN_BY, log)
     pusher.claim()  # stops here, before any training, if the branch is taken
+    needed = pd.concat([train_df["path"], val_df["path"], TEST["path"], qual_val["path"]])
+    warm_file_cache([DATA_ROOT / path for path in needed.unique()], log)
     try:
         with GpuTrace(RUN_DIR / "gpu_trace.csv"):
             model, summary = fit(
