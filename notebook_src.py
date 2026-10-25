@@ -1705,7 +1705,7 @@ RUN_DIR = REPO_DIR / RUNS_SUBDIR / RUN_NAME
 CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
 
 
-IO_THREADS = 64  # threads for the cache warm-up; speed only, never affects results
+IO_THREADS = 128  # cache warm-up threads (596 files/s measured on Kaggle); speed only
 
 
 def warm_file_cache(paths: list[Path], log: Callable[[str], None]) -> None:
