@@ -129,6 +129,7 @@ uncert-cxr/
   splits/split_seed42.csv
   qual/qual_ids.csv
   tools/fake_chexpert.py  tools/status.py
+  tools/make_nb.py  tools/pushtest.py   (notebook generation; push test against a local bare repo)
   runs/<policy>_s<seed>/        (arrives from the run branches)
   results/tables/  results/figures/
 ```
@@ -310,7 +311,7 @@ Swap freely; the runs are independent. The extra experiment promised in Table II
 
 **Rules**
 1. Everyone runs the same tagged notebook version (`v1`), the same dataset mirror and the same accelerator.
-2. Each teammate runs a `SMOKE = True` pass first and checks: files on their `smoke/<policy>_s<seed>` branch, no token in any log, `.pt` not in git, row counts as expected.
+2. The builder runs a `SMOKE = True` pass first (teammates only start full runs) and checks: files on the `smoke/<policy>_s<seed>` branch, no token in any log, `.pt` not in git, row counts as expected.
 3. Teammates start full runs only after the builder's baseline has finished two epochs and looks sane (validation mean AUROC rising, no NaN, throughput acceptable). The epoch log appears on `run/u_zeros_s42` while it trains.
 4. Teammates push only to their own `run/...` branches, never to `main`.
 5. If a run fails or looks wrong, do not edit and rerun. Tell the builder; a fix means a new version tag and a rerun of every affected run.
@@ -415,8 +416,8 @@ Only if time and quota allow. Layers are all-or-nothing and go in order (section
 | Group | Tool | What it gives you | Cost to epoch time |
 |---|---|---|---|
 | Dev | `ruff` (lint and format) via `make lint` | Clean, consistent code for the 15-point quality item | none, never runs in training |
-| Dev | `Makefile`: `make fake` (build the fake dataset), `make smoke` (all seven policies on CPU), `make nb` (jupytext conversion), `make check` (lint, smoke, results mode on the fake runs, headless `nbconvert --execute` of the generated notebook) | One command proves the notebook runs top to bottom | none |
-| Dev | `pre-commit` hook: ruff plus a pattern check that blocks `github_pat_`, `ghp_` strings and `kaggle.json` | Keeps tokens out of git on three laptops | none |
+| Dev | `Makefile`: `make fake` (build the fake dataset), `make smoke` (all seven policies on CPU), `make nb` (jupytext conversion through `tools/make_nb.py`, which makes the output identical on every run: fixed kernelspec, nbformat 4.4, no cell ids), `make nbcheck` (fails if the committed `.ipynb` is stale), `make nbtest` (nbcheck plus headless `nbconvert --execute` of the generated notebook), `make pushtest` (the GitHub push against a local bare repo), `make check` (lint, hook test, results mode twice with split and qualitative files byte-identical, `nbtest`) | One command proves the notebook runs top to bottom | none |
+| Dev | `pre-commit` hook: ruff plus a pattern check that blocks `github_pat_`, `ghp_` strings and `kaggle.json` | Keeps tokens out of git on three laptops; a fourth hook, `notebook-current`, fails a commit when the committed `.ipynb` differs from `notebook_src.py` | none |
 | Monitoring | One throttled log line every `log_every` steps: loss, images per second, ETA, learning rate, loss scale. No progress bar (bars flood Kaggle commit logs) | Readable logs, early sign of a slow run | negligible, one print per 50 steps |
 | Monitoring | Gradient norm and AMP loss scale every `grad_stats_every` steps to `grad_stats.csv` | Explains NaNs, overflow and unstable runs | negligible, once per 200 steps |
 | Monitoring | Background thread running `nvidia-smi` every 10 s into `gpu_trace.csv` (utilisation, memory, clock, power) | Shows whether epochs are GPU-bound or loader-bound; feeds the cost table | none, separate thread |
