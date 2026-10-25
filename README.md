@@ -29,9 +29,10 @@ proposal is in [docs/](docs/).
 ```
 chexpert_uncertainty.ipynb   generated from notebook_src.py; this is what you import into Kaggle
 notebook_src.py              the notebook's source (jupytext "# %%" cells); edit this one
-splits/  qual/               patient split and qualitative image lists (created once from the real
-                             CSVs and committed before the version is tagged; not added yet)
-tools/                       fake_chexpert.py (fake data), make_nb.py, pushtest.py, status.py
+splits/  qual/               patient split and qualitative image lists, created once from the real
+                             CSVs; Kaggle runs only read them
+tools/                       fake_chexpert.py (fake data), make_nb.py, pushtest.py, status.py,
+                             resulttest.py, run_until.py (dev checks)
 Makefile  pyproject.toml     dev tasks and lint settings
 flake.nix  .envrc            the dev environment (Nix + direnv)
 docs/                        the plan and the proposal
@@ -43,14 +44,16 @@ holds only that run's folder `runs/<policy>_s<seed>/` and no code.
 ## Running one policy on Kaggle
 
 Everyone runs the **same tagged version** of the notebook, on the same dataset and the same GPU
-type. The builder announces these before any full run:
+type. These are the settings:
 
 | Setting | Value |
 |---|---|
-| Notebook version (git tag) | to be announced by the builder |
-| Kaggle dataset | to be announced by the builder |
-| Accelerator | to be announced by the builder (one GPU only; not 2 x T4) |
+| Notebook version (git tag) | `v1`, announced by the builder once the checks on Kaggle are done |
+| Kaggle dataset | `ashery/chexpert` (the CheXpert-v1.0-small mirror); attach this one only |
+| Accelerator | GPU T4 x2 (the notebook uses one of the two GPUs; about 120 images/s) |
+| Environment | keep the default; each run records its Python, torch and CUDA versions |
 | Seeds | 42 only, unless the builder announces extra seed layers (43, then 44) |
+| Time per run | about 4.5 hours for 10 epochs, plus a few minutes of cache warm-up at the start |
 
 Who runs what (swap freely, the runs are independent):
 
@@ -60,22 +63,29 @@ Who runs what (swap freely, the runs are independent):
 | Teammate 1 | `u_ones`, `u_ignore` |
 | Teammate 2 | `u_multiclass`, `u_ones_lsr` |
 
+Two runs per person use about 10 hours of the 30-hour weekly GPU quota, and every extra seed
+layer costs the same again.
+
 ### One-time setup in your Kaggle account
 
 1. Verify your phone number (needed for GPU and internet) and note your weekly GPU quota.
-2. Create a GitHub **fine-grained token** limited to this repository with *Contents: read and
-   write*, expiring after your last run.
-3. In a Kaggle notebook, open *Add-ons > Secrets* and add three secrets:
-   `GITHUB_PAT` (the token), `GITHUB_REPO` (`owner/name` of this repository) and `GITHUB_USER`
-   (your GitHub username).
+2. Create a GitHub **fine-grained token**: Repository access *Only select repositories*, this
+   repository only; Repository permissions *Contents: Read and write* and nothing else; expiry
+   after your last run. With read-only access a run stops at its first push with
+   `403 ... Permission ... denied`.
+3. In a Kaggle notebook, open *Add-ons > Secrets* and add three secrets, each attached to the
+   notebook: `GITHUB_PAT` (the token), `GITHUB_REPO` (`owner/name` of this repository) and
+   `GITHUB_USER` (your GitHub username).
 
 The token lives only in Secrets. Never paste it into a cell, and keep your notebook **private**.
+Do not link the notebook to GitHub: that would commit notebook versions into the repository.
 
 ### Each run
 
-1. Download `chexpert_uncertainty.ipynb` from the tagged version and import it into Kaggle.
-2. In the settings panel: set the accelerator announced above, turn **Internet on**, attach the
-   dataset, and attach the three secrets.
+1. Download `chexpert_uncertainty.ipynb` from the tagged version and import it into Kaggle
+   (File > Import notebook).
+2. In the settings panel: accelerator *GPU T4 x2*, **Internet on**, *Add Input* the dataset above,
+   and attach the three secrets.
 3. In the first code cell (*0.1 Run settings*) change the default of `POLICY` to your policy, for
    example `POLICY = os.environ.get("POLICY", "u_ones")`. Do not edit anything else.
 4. **Save Version, then Save and Run All (Commit)**, and close the tab; it runs in the
@@ -85,15 +95,22 @@ The token lives only in Secrets. Never paste it into a cell, and keep your noteb
    anywhere in the branch. Send the builder one line: date, policy, GPU, wall-clock time and the
    best epoch.
 
-A full run is about 10 epochs (up to a few hours on one GPU). The epoch log is pushed to your
-branch after every epoch, so a session that dies still leaves its history behind.
+What the log shows, in order: the versions of Python and the libraries, the repository version
+that was cloned, the dataset folder, the row counts (`train.csv: 223,414 rows`), the training and
+validation image counts, `cache warm-up` lines (every image is read once so the epochs run from
+memory instead of waiting for storage), then about one `epoch N step ... img/s` line per 50 steps
+and one `epoch N done` line per epoch. From the second epoch on, `img/s` should be near 120; tell
+the builder if it stays below about 100. The epoch log is pushed to your branch after every epoch,
+so a session that dies still leaves its history behind.
 
 ### Rules
 
-1. Smoke pass first, by the builder only: with `SMOKE=1` a run trains on a small subset for two
-   epochs and pushes to `smoke/<policy>_s<seed>` (smoke branches are overwritten freely). The
-   builder checks the files, that no token appears in any log and that throughput is acceptable.
-   Teammates start full runs only after the builder announces it.
+1. Smoke pass first, by the builder only: in cell 0.1 set the `SMOKE` default to `"1"` (and
+   `REPO_REF` to `"main"` while there is no tag). A smoke run trains on 2,000 images for two
+   epochs and pushes to `smoke/<policy>_s<seed>` (smoke branches are overwritten freely). Its log
+   says `(smoke run)` and `2,000 training and 500 validation images`; stop it at once if it says
+   `(full run)`. The builder checks the files, that no token appears in any log and that
+   throughput is acceptable. Teammates start full runs only after the builder announces it.
 2. Start full runs only after the builder's baseline `u_zeros` has finished two epochs and looks
    sane (validation AUROC rising, no NaN).
 3. Push only to your own `run/...` branches, never to `main`. A full run refuses to start if its
@@ -101,6 +118,19 @@ branch after every epoch, so a session that dies still leaves its history behind
    another or ask the builder.
 4. If a run fails or looks wrong, do not edit the notebook and rerun. Tell the builder: a fix
    needs a new version tag and a rerun of every affected run.
+
+### If it stops
+
+| Message | Cause and fix |
+|---|---|
+| `Kaggle Secret GITHUB_REPO ... is not set`, or `GITHUB_PAT and GITHUB_REPO are not both set` | the secrets are missing, or not attached to this notebook |
+| `git push failed ... 403 ... Permission ... denied` | the token cannot write: set *Contents* to *Read and write* for this repository |
+| `Remote branch v1 not found` | the tag does not exist yet (the builder announces it) |
+| `splits/split_seed42.csv is missing` | the split files are not in the version being cloned |
+| `expected one dataset folder with train.csv and valid.csv` | no dataset attached, or two |
+| `train.csv: N rows, official mirror has 223414` | the wrong dataset mirror |
+| `... is not empty; remove it to start this run again` | an earlier attempt in this session left files: run `!rm -rf /kaggle/working/repo/runs /kaggle/working/repo/runs_smoke /kaggle/working/repo/checkpoints` and run again |
+| `branch run/<policy>_s42 already exists` | someone started that policy and seed; tell the builder, do not delete it yourself |
 
 ### Watching progress
 
@@ -130,6 +160,8 @@ make hooks      # once: install the pre-commit hooks (ruff, token and kaggle.jso
 make check      # lint, hook test, fake data, data-prep reruns, headless run of the notebook
 make smoke      # one smoke training per policy on the fake data (about 8 minutes on a CPU)
 make pushtest   # the GitHub push and tools/status.py against a local bare repository
+make fakeruns   # once, about 45 minutes: 21 fake runs on a local bare repo for the next target
+make resulttest # results mode on those runs: seed choice, tampering, missing runs, exports
 make nb         # regenerate chexpert_uncertainty.ipynb after editing notebook_src.py
 ```
 
