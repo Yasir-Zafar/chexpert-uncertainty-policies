@@ -112,7 +112,7 @@ The file submitted is the executed `results` notebook: all code visible, outputs
 **Local development without the licensed data.** `tools/fake_chexpert.py` builds a tiny CheXpert-shaped dataset (frontal and lateral rows, AP and PA, -1/0/1/blank labels, random grayscale JPEGs). Environment variables `MODE`, `POLICY`, `SEED`, `SMOKE`, `DATA_ROOT` and `REPO_DIR` let the whole notebook run on CPU against it. `REPO_DIR` points the notebook at `fake_data/repo`, so a split or qualitative list built from fake data can never land in the real `splits/` or `qual/` folders. The tool is not part of the submission, and the notebook contains no fake-data code.
 
 **GitHub logging.**
-- Each run pushes `runs/<policy>_s<seed>/` to branch `run/<policy>_s<seed>` from inside the notebook, using a fine-grained token from Kaggle Secrets. Progress (the epoch log) is pushed after every epoch, so a dead session still leaves history.
+- Each run pushes `runs/<policy>_s<seed>/` to branch `run/<policy>_s<seed>` from inside the notebook, using a fine-grained token from Kaggle Secrets. Progress (the epoch log) is pushed after every epoch, so a dead session still leaves history. The branch is an orphan branch holding only the run folder, pushed from a throw-away repository, so code, checkpoints and `main` can never be part of a push. The first push refuses a `run/` branch that already exists (two people picked the same policy and seed); the builder deletes the branch of a failed run before it is rerun. A `SMOKE` pass pushes to `smoke/<policy>_s<seed>` instead (`runs_smoke/...` inside), and that branch is overwritten by the next smoke pass, so a smoke run can never block a real one.
 - Kaggle's built-in "Link to GitHub" (File menu) can also be switched on to keep a copy of each notebook version. It saves the notebook, not output files, and users report it won't recommit under an unchanged file name, so treat it as a convenience and rely on the push cell.
 - Results mode fetches the six branches and reads `runs/` from them.
 - Checkpoints (`best.pt`, about 28 MB) are never pushed. They stay in the Kaggle notebook output.
@@ -310,7 +310,7 @@ Swap freely; the runs are independent. The extra experiment promised in Table II
 
 **Rules**
 1. Everyone runs the same tagged notebook version (`v1`), the same dataset mirror and the same accelerator.
-2. Each teammate runs a `SMOKE = True` pass first and checks: files on their branch, no token in any log, `.pt` not in git, row counts as expected.
+2. Each teammate runs a `SMOKE = True` pass first and checks: files on their `smoke/<policy>_s<seed>` branch, no token in any log, `.pt` not in git, row counts as expected.
 3. Teammates start full runs only after the builder's baseline has finished two epochs and looks sane (validation mean AUROC rising, no NaN, throughput acceptable). The epoch log appears on `run/u_zeros_s42` while it trains.
 4. Teammates push only to their own `run/...` branches, never to `main`.
 5. If a run fails or looks wrong, do not edit and rerun. Tell the builder; a fix means a new version tag and a rerun of every affected run.
