@@ -1,0 +1,82 @@
+{
+  "policy": "u_zeros",
+  "seed": 42,
+  "code_version": "v1",
+  "smoke": false,
+  "config": {
+    "code_version": "v1",
+    "pathologies": [
+      "Atelectasis",
+      "Cardiomegaly",
+      "Consolidation",
+      "Edema",
+      "Pleural Effusion"
+    ],
+    "image_size": 320,
+    "val_fraction": 0.1,
+    "split_seed": 42,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "batch_size": 32,
+    "max_epochs": 10,
+    "optimizer": "AdamW",
+    "lr": 0.0001,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "weight_decay": 1e-05,
+    "plateau_factor": 0.1,
+    "plateau_patience": 1,
+    "early_stop_patience": 3,
+    "amp": true,
+    "rotation_deg": 10,
+    "crop_scale": [
+      0.9,
+      1.0
+    ],
+    "crop_ratio": [
+      0.95,
+      1.05
+    ],
+    "jitter": 0.1,
+    "mc_dropout_p": 0.3,
+    "mc_passes": 20,
+    "lsr_range": [
+      0.55,
+      0.85
+    ],
+    "bootstrap_resamples": 1000,
+    "ece_bins": 10,
+    "num_workers": 4,
+    "channels_last": true,
+    "cudnn_benchmark": false,
+    "log_every": 50,
+    "grad_stats_every": 200,
+    "qual_val_images": 600,
+    "qual_min_uncertain": 50
+  },
+  "run_limits": {
+    "train_images": null,
+    "val_images": null,
+    "qual_images": null,
+    "max_epochs": 10,
+    "batch_size": 32,
+    "grad_stats_every": 200
+  },
+  "split_sha256": "0068fef86ada93559a3b17aa5ccf1efce76ac855a77070ef502d14d3711fd401",
+  "data_fingerprint": "6ce51e129aec784dca81dd922a5c998629673d867038989be5d611d1529ef2be",
+  "run_by": "Yasir-Zafar",
+  "gpu_name": "Tesla T4",
+  "gpu_count": 2,
+  "torch": "2.11.0+cu128",
+  "cuda": "12.8",
+  "python": "3.13.15",
+  "status": "running",
+  "started": "2026-10-25 15:10:23",
+  "n_train_images": 171892,
+  "n_val_images": 19118
+}
