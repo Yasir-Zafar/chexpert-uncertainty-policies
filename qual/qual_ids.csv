@@ -1,0 +1,803 @@
+path,split,group
+train/patient00287/study1/view1_frontal.jpg,val,random
+train/patient00314/study11/view1_frontal.jpg,val,random
+train/patient00314/study4/view1_frontal.jpg,val,random
+train/patient00340/study1/view1_frontal.jpg,val,random
+train/patient00375/study2/view1_frontal.jpg,val,random
+train/patient00495/study3/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient00495/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient00748/study1/view2_frontal.jpg,val,random
+train/patient00965/study7/view1_frontal.jpg,val,random
+train/patient00977/study1/view1_frontal.jpg,val,random
+train/patient01167/study11/view1_frontal.jpg,val,random
+train/patient01230/study1/view1_frontal.jpg,val,random
+train/patient01263/study11/view1_frontal.jpg,val,random
+train/patient01263/study15/view1_frontal.jpg,val,uncertain Edema
+train/patient01496/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient01496/study2/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient01772/study6/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient01785/study7/view1_frontal.jpg,val,random
+train/patient01863/study1/view1_frontal.jpg,val,random
+train/patient02495/study2/view1_frontal.jpg,val,random
+train/patient02662/study19/view1_frontal.jpg,val,random
+train/patient02785/study5/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient02857/study1/view1_frontal.jpg,val,random
+train/patient02882/study6/view1_frontal.jpg,val,random
+train/patient02979/study3/view1_frontal.jpg,val,random
+train/patient03108/study1/view1_frontal.jpg,val,random
+train/patient03282/study6/view1_frontal.jpg,val,random
+train/patient03587/study2/view1_frontal.jpg,val,random
+train/patient03811/study3/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient03828/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient03961/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient04143/study1/view1_frontal.jpg,val,random
+train/patient04239/study5/view1_frontal.jpg,val,random
+train/patient04456/study2/view1_frontal.jpg,val,random
+train/patient04899/study10/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient04949/study3/view1_frontal.jpg,val,random
+train/patient05108/study5/view1_frontal.jpg,val,uncertain Edema
+train/patient05108/study8/view1_frontal.jpg,val,random
+train/patient05115/study7/view1_frontal.jpg,val,uncertain Consolidation
+train/patient05115/study9/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient05165/study11/view1_frontal.jpg,val,random
+train/patient05165/study18/view1_frontal.jpg,val,random
+train/patient05273/study1/view1_frontal.jpg,val,random
+train/patient05394/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient05484/study1/view1_frontal.jpg,val,random
+train/patient05738/study5/view1_frontal.jpg,val,uncertain Edema
+train/patient05738/study8/view1_frontal.jpg,val,random
+train/patient05803/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient05817/study1/view1_frontal.jpg,val,random
+train/patient05839/study2/view1_frontal.jpg,val,random
+train/patient05848/study13/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient05864/study1/view1_frontal.jpg,val,random
+train/patient05892/study10/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient05892/study6/view1_frontal.jpg,val,uncertain Edema
+train/patient05892/study8/view1_frontal.jpg,val,uncertain Edema
+train/patient05974/study2/view1_frontal.jpg,val,random
+train/patient06166/study5/view1_frontal.jpg,val,random
+train/patient06436/study3/view1_frontal.jpg,val,random
+train/patient06521/study2/view1_frontal.jpg,val,random
+train/patient06532/study1/view1_frontal.jpg,val,random
+train/patient06781/study2/view1_frontal.jpg,val,random
+train/patient06827/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient06882/study10/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient07003/study9/view1_frontal.jpg,val,random
+train/patient07023/study35/view1_frontal.jpg,val,random
+train/patient07023/study42/view1_frontal.jpg,val,random
+train/patient07046/study16/view1_frontal.jpg,val,random
+train/patient07060/study2/view1_frontal.jpg,val,random
+train/patient07060/study20/view1_frontal.jpg,val,uncertain Consolidation
+train/patient07067/study12/view1_frontal.jpg,val,random
+train/patient07129/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient07135/study1/view1_frontal.jpg,val,random
+train/patient07242/study1/view1_frontal.jpg,val,random
+train/patient07338/study1/view1_frontal.jpg,val,random
+train/patient07370/study2/view1_frontal.jpg,val,random
+train/patient07550/study9/view1_frontal.jpg,val,random
+train/patient07580/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient07632/study14/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient07632/study19/view1_frontal.jpg,val,random
+train/patient07632/study22/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient07740/study5/view1_frontal.jpg,val,random
+train/patient07754/study7/view1_frontal.jpg,val,random
+train/patient07764/study9/view2_frontal.jpg,val,random
+train/patient07815/study1/view1_frontal.jpg,val,random
+train/patient07837/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient07837/study5/view1_frontal.jpg,val,random
+train/patient07867/study3/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient07978/study2/view1_frontal.jpg,val,random
+train/patient07984/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient08014/study1/view1_frontal.jpg,val,random
+train/patient08031/study3/view1_frontal.jpg,val,random
+train/patient08107/study12/view1_frontal.jpg,val,random
+train/patient08112/study3/view1_frontal.jpg,val,random
+train/patient08411/study3/view1_frontal.jpg,val,uncertain Edema
+train/patient08440/study2/view1_frontal.jpg,val,random
+train/patient08558/study1/view1_frontal.jpg,val,random
+train/patient08632/study1/view1_frontal.jpg,val,random
+train/patient08680/study1/view1_frontal.jpg,val,random
+train/patient08786/study1/view1_frontal.jpg,val,random
+train/patient09181/study1/view1_frontal.jpg,val,random
+train/patient09218/study1/view1_frontal.jpg,val,random
+train/patient09292/study1/view1_frontal.jpg,val,random
+train/patient09292/study2/view1_frontal.jpg,val,random
+train/patient09608/study3/view1_frontal.jpg,val,random
+train/patient09649/study13/view1_frontal.jpg,val,random
+train/patient09649/study6/view1_frontal.jpg,val,random
+train/patient09669/study2/view1_frontal.jpg,val,random
+train/patient09699/study2/view1_frontal.jpg,val,random
+train/patient09758/study15/view1_frontal.jpg,val,random
+train/patient09917/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient09929/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient09981/study17/view1_frontal.jpg,val,random
+train/patient09985/study1/view1_frontal.jpg,val,random
+train/patient10069/study1/view1_frontal.jpg,val,random
+train/patient10070/study1/view1_frontal.jpg,val,random
+train/patient10258/study3/view1_frontal.jpg,val,uncertain Edema
+train/patient10402/study2/view1_frontal.jpg,val,random
+train/patient10413/study5/view1_frontal.jpg,val,random
+train/patient10479/study3/view1_frontal.jpg,val,random
+train/patient10479/study6/view1_frontal.jpg,val,random
+train/patient10970/study48/view1_frontal.jpg,val,random
+train/patient10970/study52/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient11067/study3/view1_frontal.jpg,val,random
+train/patient11371/study5/view1_frontal.jpg,val,random
+train/patient11490/study12/view1_frontal.jpg,val,random
+train/patient11490/study14/view1_frontal.jpg,val,random
+train/patient11490/study15/view1_frontal.jpg,val,random
+train/patient11879/study1/view1_frontal.jpg,val,random
+train/patient11961/study3/view1_frontal.jpg,val,uncertain Edema
+train/patient12222/study9/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient12304/study20/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient12485/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient12597/study6/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient12871/study7/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient12961/study1/view1_frontal.jpg,val,random
+train/patient13120/study1/view1_frontal.jpg,val,random
+train/patient13144/study3/view1_frontal.jpg,val,random
+train/patient13209/study2/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient13294/study1/view1_frontal.jpg,val,random
+train/patient13311/study3/view1_frontal.jpg,val,random
+train/patient13388/study1/view1_frontal.jpg,val,random
+train/patient13544/study1/view1_frontal.jpg,val,random
+train/patient13568/study1/view1_frontal.jpg,val,random
+train/patient13689/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient13693/study4/view1_frontal.jpg,val,random
+train/patient13857/study7/view1_frontal.jpg,val,random
+train/patient13988/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient14190/study2/view1_frontal.jpg,val,random
+train/patient14229/study2/view1_frontal.jpg,val,random
+train/patient14230/study4/view1_frontal.jpg,val,random
+train/patient14422/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient14422/study2/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient14437/study1/view1_frontal.jpg,val,random
+train/patient15404/study1/view1_frontal.jpg,val,random
+train/patient15444/study4/view1_frontal.jpg,val,random
+train/patient15662/study2/view1_frontal.jpg,val,random
+train/patient15662/study3/view1_frontal.jpg,val,random
+train/patient15702/study8/view1_frontal.jpg,val,random
+train/patient15768/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient15972/study12/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient15972/study6/view1_frontal.jpg,val,random
+train/patient16108/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient16274/study12/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient16274/study14/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient16401/study2/view1_frontal.jpg,val,random
+train/patient16411/study6/view1_frontal.jpg,val,random
+train/patient16442/study13/view1_frontal.jpg,val,random
+train/patient16464/study26/view1_frontal.jpg,val,random
+train/patient16486/study9/view1_frontal.jpg,val,random
+train/patient16606/study12/view1_frontal.jpg,val,random
+train/patient16606/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient16626/study10/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient16626/study12/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient16626/study13/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient16626/study4/view1_frontal.jpg,val,random
+train/patient16748/study1/view1_frontal.jpg,val,random
+train/patient17093/study2/view1_frontal.jpg,val,random
+train/patient17214/study20/view1_frontal.jpg,val,random
+train/patient17214/study8/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient17431/study2/view1_frontal.jpg,val,random
+train/patient17834/study7/view1_frontal.jpg,val,random
+train/patient17916/study10/view1_frontal.jpg,val,random
+train/patient17916/study4/view1_frontal.jpg,val,random
+train/patient18024/study1/view1_frontal.jpg,val,random
+train/patient18044/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient18137/study18/view2_frontal.jpg,val,random
+train/patient18186/study25/view1_frontal.jpg,val,random
+train/patient18279/study2/view1_frontal.jpg,val,random
+train/patient18313/study11/view1_frontal.jpg,val,random
+train/patient18349/study4/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient18411/study2/view1_frontal.jpg,val,random
+train/patient18470/study14/view1_frontal.jpg,val,random
+train/patient18489/study6/view1_frontal.jpg,val,uncertain Edema
+train/patient18658/study2/view1_frontal.jpg,val,random
+train/patient18674/study7/view1_frontal.jpg,val,random
+train/patient18847/study6/view1_frontal.jpg,val,random
+train/patient19094/study2/view1_frontal.jpg,val,random
+train/patient19185/study2/view1_frontal.jpg,val,random
+train/patient20019/study3/view1_frontal.jpg,val,uncertain Consolidation
+train/patient20128/study5/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient20148/study2/view1_frontal.jpg,val,random
+train/patient20225/study4/view1_frontal.jpg,val,uncertain Consolidation
+train/patient20260/study2/view1_frontal.jpg,val,random
+train/patient20401/study3/view1_frontal.jpg,val,random
+train/patient20556/study2/view1_frontal.jpg,val,random
+train/patient20556/study39/view1_frontal.jpg,val,random
+train/patient20690/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient20850/study2/view1_frontal.jpg,val,random
+train/patient21018/study5/view1_frontal.jpg,val,random
+train/patient21086/study1/view1_frontal.jpg,val,random
+train/patient21160/study1/view1_frontal.jpg,val,random
+train/patient21307/study3/view1_frontal.jpg,val,random
+train/patient21332/study8/view1_frontal.jpg,val,random
+train/patient21458/study3/view1_frontal.jpg,val,random
+train/patient21686/study8/view1_frontal.jpg,val,uncertain Consolidation
+train/patient21823/study4/view1_frontal.jpg,val,random
+train/patient21827/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient21831/study3/view1_frontal.jpg,val,random
+train/patient21982/study7/view1_frontal.jpg,val,uncertain Consolidation
+train/patient22234/study1/view1_frontal.jpg,val,random
+train/patient22615/study2/view1_frontal.jpg,val,random
+train/patient22816/study1/view1_frontal.jpg,val,random
+train/patient22834/study1/view1_frontal.jpg,val,random
+train/patient23110/study2/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient23395/study1/view1_frontal.jpg,val,random
+train/patient23441/study10/view1_frontal.jpg,val,random
+train/patient23441/study8/view1_frontal.jpg,val,random
+train/patient23485/study1/view1_frontal.jpg,val,random
+train/patient23521/study2/view1_frontal.jpg,val,random
+train/patient23788/study1/view1_frontal.jpg,val,random
+train/patient23911/study1/view1_frontal.jpg,val,random
+train/patient23958/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient23994/study11/view1_frontal.jpg,val,random
+train/patient24168/study3/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient24227/study2/view1_frontal.jpg,val,random
+train/patient24385/study10/view1_frontal.jpg,val,random
+train/patient24426/study2/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient24426/study9/view1_frontal.jpg,val,random
+train/patient24509/study1/view1_frontal.jpg,val,random
+train/patient24531/study2/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient24540/study4/view1_frontal.jpg,val,random
+train/patient24655/study4/view1_frontal.jpg,val,random
+train/patient24667/study1/view1_frontal.jpg,val,random
+train/patient24746/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient24961/study2/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient25050/study4/view1_frontal.jpg,val,random
+train/patient25052/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient25361/study2/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient25606/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient25632/study2/view1_frontal.jpg,val,random
+train/patient25661/study10/view1_frontal.jpg,val,random
+train/patient25855/study1/view1_frontal.jpg,val,random
+train/patient26158/study1/view1_frontal.jpg,val,random
+train/patient26158/study22/view1_frontal.jpg,val,random
+train/patient26341/study12/view1_frontal.jpg,val,uncertain Edema
+train/patient26341/study24/view1_frontal.jpg,val,random
+train/patient26408/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient26525/study12/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient26525/study9/view1_frontal.jpg,val,random
+train/patient26652/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient26652/study4/view1_frontal.jpg,val,random
+train/patient26832/study21/view1_frontal.jpg,val,random
+train/patient26832/study24/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient26855/study1/view1_frontal.jpg,val,random
+train/patient26855/study4/view1_frontal.jpg,val,random
+train/patient26884/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient26975/study1/view1_frontal.jpg,val,random
+train/patient27300/study4/view2_frontal.jpg,val,uncertain Edema
+train/patient27344/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient27345/study10/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient27345/study5/view1_frontal.jpg,val,random
+train/patient27373/study7/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient27453/study3/view1_frontal.jpg,val,random
+train/patient27505/study12/view1_frontal.jpg,val,random
+train/patient27673/study6/view1_frontal.jpg,val,random
+train/patient27711/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient27758/study1/view1_frontal.jpg,val,random
+train/patient27829/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient27972/study7/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient28302/study7/view1_frontal.jpg,val,random
+train/patient28420/study4/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient28488/study4/view1_frontal.jpg,val,random
+train/patient28562/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient28641/study8/view1_frontal.jpg,val,random
+train/patient28661/study1/view1_frontal.jpg,val,random
+train/patient28760/study6/view1_frontal.jpg,val,random
+train/patient28784/study10/view1_frontal.jpg,val,random
+train/patient29037/study6/view1_frontal.jpg,val,random
+train/patient29083/study19/view1_frontal.jpg,val,random
+train/patient29083/study29/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient29083/study7/view1_frontal.jpg,val,random
+train/patient29108/study4/view1_frontal.jpg,val,random
+train/patient29338/study1/view1_frontal.jpg,val,random
+train/patient29374/study1/view1_frontal.jpg,val,random
+train/patient29559/study2/view1_frontal.jpg,val,random
+train/patient29658/study1/view1_frontal.jpg,val,random
+train/patient29703/study9/view1_frontal.jpg,val,random
+train/patient29724/study6/view1_frontal.jpg,val,random
+train/patient29873/study4/view1_frontal.jpg,val,random
+train/patient30051/study5/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient30103/study1/view1_frontal.jpg,val,random
+train/patient30252/study3/view1_frontal.jpg,val,random
+train/patient30279/study2/view1_frontal.jpg,val,random
+train/patient30308/study1/view1_frontal.jpg,val,random
+train/patient30484/study1/view1_frontal.jpg,val,random
+train/patient30629/study12/view1_frontal.jpg,val,random
+train/patient30969/study2/view1_frontal.jpg,val,random
+train/patient31046/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient31283/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient31372/study1/view1_frontal.jpg,val,random
+train/patient31463/study8/view1_frontal.jpg,val,random
+train/patient31472/study23/view1_frontal.jpg,val,random
+train/patient31709/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient31812/study3/view1_frontal.jpg,val,random
+train/patient31841/study16/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient31880/study3/view1_frontal.jpg,val,random
+train/patient32369/study5/view1_frontal.jpg,val,random
+train/patient32592/study15/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient32592/study21/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient32592/study22/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient32593/study1/view1_frontal.jpg,val,random
+train/patient32604/study1/view1_frontal.jpg,val,random
+train/patient32708/study16/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient32708/study17/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient32708/study5/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient32796/study6/view1_frontal.jpg,val,random
+train/patient32889/study1/view1_frontal.jpg,val,random
+train/patient32903/study1/view1_frontal.jpg,val,random
+train/patient32962/study1/view2_frontal.jpg,val,uncertain Cardiomegaly
+train/patient33273/study1/view1_frontal.jpg,val,random
+train/patient33314/study4/view1_frontal.jpg,val,random
+train/patient33624/study5/view1_frontal.jpg,val,random
+train/patient33745/study2/view1_frontal.jpg,val,random
+train/patient33765/study14/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient33788/study2/view2_frontal.jpg,val,uncertain Pleural Effusion
+train/patient33890/study14/view1_frontal.jpg,val,random
+train/patient33890/study21/view1_frontal.jpg,val,random
+train/patient33901/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient33971/study3/view1_frontal.jpg,val,random
+train/patient34255/study1/view2_frontal.jpg,val,random
+train/patient34284/study1/view1_frontal.jpg,val,random
+train/patient34395/study1/view1_frontal.jpg,val,random
+train/patient34574/study4/view1_frontal.jpg,val,random
+train/patient34656/study10/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient34656/study4/view1_frontal.jpg,val,random
+train/patient34702/study1/view1_frontal.jpg,val,random
+train/patient34712/study17/view1_frontal.jpg,val,random
+train/patient34786/study10/view1_frontal.jpg,val,random
+train/patient34799/study3/view1_frontal.jpg,val,random
+train/patient34854/study3/view1_frontal.jpg,val,random
+train/patient34979/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient35026/study3/view1_frontal.jpg,val,random
+train/patient35115/study23/view1_frontal.jpg,val,random
+train/patient35331/study2/view1_frontal.jpg,val,random
+train/patient35425/study9/view1_frontal.jpg,val,random
+train/patient35432/study8/view1_frontal.jpg,val,random
+train/patient35447/study1/view1_frontal.jpg,val,random
+train/patient35459/study18/view1_frontal.jpg,val,uncertain Edema
+train/patient35512/study20/view1_frontal.jpg,val,random
+train/patient35512/study24/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient35535/study7/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient35621/study12/view1_frontal.jpg,val,random
+train/patient35621/study17/view1_frontal.jpg,val,random
+train/patient35621/study5/view1_frontal.jpg,val,random
+train/patient35644/study11/view1_frontal.jpg,val,uncertain Consolidation
+train/patient35741/study4/view1_frontal.jpg,val,random
+train/patient35750/study10/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient35750/study6/view1_frontal.jpg,val,random
+train/patient35773/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient35805/study12/view1_frontal.jpg,val,uncertain Edema
+train/patient35813/study3/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient35838/study2/view1_frontal.jpg,val,random
+train/patient35917/study5/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient36014/study8/view2_frontal.jpg,val,random
+train/patient36082/study9/view1_frontal.jpg,val,random
+train/patient36274/study2/view1_frontal.jpg,val,random
+train/patient36508/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient36688/study1/view1_frontal.jpg,val,random
+train/patient36688/study10/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient36701/study3/view1_frontal.jpg,val,random
+train/patient36707/study2/view1_frontal.jpg,val,random
+train/patient36708/study9/view1_frontal.jpg,val,random
+train/patient36722/study4/view1_frontal.jpg,val,random
+train/patient36907/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient36928/study3/view2_frontal.jpg,val,random
+train/patient37333/study10/view1_frontal.jpg,val,random
+train/patient37333/study15/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient37342/study3/view1_frontal.jpg,val,random
+train/patient37342/study5/view1_frontal.jpg,val,random
+train/patient37410/study1/view1_frontal.jpg,val,random
+train/patient37514/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient37592/study4/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient37592/study5/view1_frontal.jpg,val,random
+train/patient37705/study5/view1_frontal.jpg,val,uncertain Edema
+train/patient37818/study1/view1_frontal.jpg,val,random
+train/patient38140/study5/view1_frontal.jpg,val,random
+train/patient38174/study13/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient38334/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient38482/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient38681/study4/view1_frontal.jpg,val,random
+train/patient38681/study8/view1_frontal.jpg,val,random
+train/patient38895/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient38903/study2/view1_frontal.jpg,val,random
+train/patient38949/study17/view1_frontal.jpg,val,random
+train/patient39057/study2/view2_frontal.jpg,val,random
+train/patient39080/study3/view1_frontal.jpg,val,random
+train/patient39109/study10/view1_frontal.jpg,val,random
+train/patient39109/study7/view1_frontal.jpg,val,random
+train/patient39109/study8/view1_frontal.jpg,val,random
+train/patient39114/study3/view1_frontal.jpg,val,random
+train/patient39205/study1/view1_frontal.jpg,val,random
+train/patient39248/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient39329/study2/view1_frontal.jpg,val,random
+train/patient39374/study17/view1_frontal.jpg,val,random
+train/patient39418/study1/view1_frontal.jpg,val,random
+train/patient39541/study1/view1_frontal.jpg,val,random
+train/patient39570/study2/view1_frontal.jpg,val,random
+train/patient39676/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient39778/study8/view1_frontal.jpg,val,random
+train/patient39898/study2/view1_frontal.jpg,val,random
+train/patient39979/study1/view1_frontal.jpg,val,random
+train/patient40099/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient40143/study2/view1_frontal.jpg,val,random
+train/patient40161/study15/view1_frontal.jpg,val,uncertain Edema
+train/patient40163/study1/view1_frontal.jpg,val,random
+train/patient40190/study2/view1_frontal.jpg,val,random
+train/patient40190/study3/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient40386/study6/view1_frontal.jpg,val,uncertain Edema
+train/patient40492/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40498/study1/view1_frontal.jpg,val,random
+train/patient40515/study2/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40515/study3/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40700/study3/view1_frontal.jpg,val,random
+train/patient40703/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40703/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40741/study3/view1_frontal.jpg,val,random
+train/patient40741/study5/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient40813/study1/view1_frontal.jpg,val,random
+train/patient40837/study5/view1_frontal.jpg,val,random
+train/patient40858/study5/view1_frontal.jpg,val,random
+train/patient40899/study3/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient40899/study4/view1_frontal.jpg,val,uncertain Edema
+train/patient40956/study1/view1_frontal.jpg,val,random
+train/patient41019/study3/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient41037/study12/view1_frontal.jpg,val,uncertain Edema
+train/patient41171/study10/view1_frontal.jpg,val,random
+train/patient41198/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient41355/study4/view1_frontal.jpg,val,random
+train/patient41358/study1/view1_frontal.jpg,val,random
+train/patient41389/study4/view1_frontal.jpg,val,random
+train/patient41430/study15/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient41545/study12/view1_frontal.jpg,val,random
+train/patient41545/study13/view1_frontal.jpg,val,random
+train/patient41735/study5/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient41867/study2/view1_frontal.jpg,val,random
+train/patient41867/study3/view1_frontal.jpg,val,random
+train/patient41917/study2/view1_frontal.jpg,val,random
+train/patient41969/study1/view1_frontal.jpg,val,random
+train/patient42128/study2/view1_frontal.jpg,val,random
+train/patient42343/study1/view1_frontal.jpg,val,random
+train/patient42428/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient42446/study6/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient42481/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient42500/study6/view1_frontal.jpg,val,random
+train/patient42538/study2/view1_frontal.jpg,val,random
+train/patient42618/study1/view1_frontal.jpg,val,random
+train/patient42621/study2/view1_frontal.jpg,val,random
+train/patient42621/study8/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient42732/study1/view1_frontal.jpg,val,random
+train/patient42744/study2/view1_frontal.jpg,val,random
+train/patient42744/study3/view1_frontal.jpg,val,uncertain Edema
+train/patient42832/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient42923/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient42923/study6/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient42927/study1/view1_frontal.jpg,val,random
+train/patient42991/study2/view2_frontal.jpg,val,uncertain Edema
+train/patient43026/study9/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient43089/study8/view1_frontal.jpg,val,random
+train/patient43116/study2/view1_frontal.jpg,val,random
+train/patient43116/study8/view1_frontal.jpg,val,random
+train/patient43133/study1/view1_frontal.jpg,val,random
+train/patient43399/study1/view1_frontal.jpg,val,random
+train/patient43608/study5/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient43709/study2/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient43720/study2/view1_frontal.jpg,val,random
+train/patient43731/study5/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient43754/study6/view1_frontal.jpg,val,random
+train/patient43819/study1/view1_frontal.jpg,val,random
+train/patient44478/study2/view1_frontal.jpg,val,random
+train/patient44762/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient44882/study1/view1_frontal.jpg,val,random
+train/patient45079/study3/view1_frontal.jpg,val,random
+train/patient45140/study2/view1_frontal.jpg,val,uncertain Edema
+train/patient45196/study1/view1_frontal.jpg,val,random
+train/patient45351/study5/view1_frontal.jpg,val,random
+train/patient45351/study7/view1_frontal.jpg,val,random
+train/patient45400/study1/view1_frontal.jpg,val,random
+train/patient45494/study1/view1_frontal.jpg,val,random
+train/patient45552/study10/view1_frontal.jpg,val,random
+train/patient45773/study1/view1_frontal.jpg,val,random
+train/patient45805/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient45849/study2/view1_frontal.jpg,val,random
+train/patient45928/study3/view1_frontal.jpg,val,random
+train/patient45995/study1/view1_frontal.jpg,val,random
+train/patient46151/study3/view1_frontal.jpg,val,random
+train/patient46236/study6/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient46242/study4/view1_frontal.jpg,val,random
+train/patient46303/study2/view1_frontal.jpg,val,random
+train/patient46431/study1/view1_frontal.jpg,val,random
+train/patient46544/study5/view1_frontal.jpg,val,random
+train/patient46884/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient46914/study1/view1_frontal.jpg,val,random
+train/patient46932/study1/view1_frontal.jpg,val,random
+train/patient46932/study6/view1_frontal.jpg,val,random
+train/patient47215/study1/view1_frontal.jpg,val,random
+train/patient47323/study1/view1_frontal.jpg,val,random
+train/patient47337/study3/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient47380/study2/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient47998/study1/view1_frontal.jpg,val,random
+train/patient48000/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient48201/study3/view1_frontal.jpg,val,random
+train/patient48237/study1/view1_frontal.jpg,val,random
+train/patient48296/study1/view1_frontal.jpg,val,random
+train/patient48357/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient48608/study2/view1_frontal.jpg,val,random
+train/patient48676/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient48842/study3/view1_frontal.jpg,val,uncertain Edema
+train/patient49213/study3/view1_frontal.jpg,val,random
+train/patient49299/study1/view1_frontal.jpg,val,random
+train/patient49706/study1/view1_frontal.jpg,val,random
+train/patient49748/study1/view1_frontal.jpg,val,random
+train/patient50070/study2/view1_frontal.jpg,val,random
+train/patient50284/study3/view1_frontal.jpg,val,random
+train/patient50764/study2/view1_frontal.jpg,val,random
+train/patient50857/study1/view1_frontal.jpg,val,random
+train/patient50938/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient51085/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient51250/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient51339/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient51834/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient52024/study1/view1_frontal.jpg,val,random
+train/patient52044/study1/view1_frontal.jpg,val,random
+train/patient52111/study1/view1_frontal.jpg,val,random
+train/patient52131/study3/view1_frontal.jpg,val,random
+train/patient52374/study1/view1_frontal.jpg,val,random
+train/patient52975/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient52997/study1/view1_frontal.jpg,val,random
+train/patient53074/study1/view1_frontal.jpg,val,random
+train/patient53166/study1/view1_frontal.jpg,val,random
+train/patient53290/study1/view1_frontal.jpg,val,random
+train/patient53327/study2/view1_frontal.jpg,val,random
+train/patient53342/study1/view1_frontal.jpg,val,random
+train/patient53457/study2/view1_frontal.jpg,val,random
+train/patient53545/study1/view1_frontal.jpg,val,random
+train/patient53850/study2/view1_frontal.jpg,val,random
+train/patient53886/study2/view1_frontal.jpg,val,random
+train/patient53886/study5/view1_frontal.jpg,val,random
+train/patient54264/study1/view1_frontal.jpg,val,random
+train/patient54385/study1/view1_frontal.jpg,val,random
+train/patient54758/study2/view1_frontal.jpg,val,random
+train/patient54789/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient54819/study5/view1_frontal.jpg,val,random
+train/patient54920/study1/view1_frontal.jpg,val,random
+train/patient54953/study2/view1_frontal.jpg,val,random
+train/patient55122/study2/view1_frontal.jpg,val,random
+train/patient55343/study1/view1_frontal.jpg,val,random
+train/patient55577/study1/view2_frontal.jpg,val,random
+train/patient55695/study2/view1_frontal.jpg,val,random
+train/patient55825/study1/view1_frontal.jpg,val,random
+train/patient55957/study1/view1_frontal.jpg,val,random
+train/patient56286/study5/view1_frontal.jpg,val,random
+train/patient56478/study1/view1_frontal.jpg,val,random
+train/patient56666/study1/view1_frontal.jpg,val,random
+train/patient56923/study1/view1_frontal.jpg,val,random
+train/patient56982/study2/view1_frontal.jpg,val,random
+train/patient57632/study1/view1_frontal.jpg,val,random
+train/patient57652/study2/view1_frontal.jpg,val,random
+train/patient57945/study2/view1_frontal.jpg,val,random
+train/patient58088/study2/view1_frontal.jpg,val,random
+train/patient58116/study1/view1_frontal.jpg,val,random
+train/patient58456/study1/view1_frontal.jpg,val,uncertain Pleural Effusion
+train/patient58760/study1/view1_frontal.jpg,val,random
+train/patient58853/study2/view1_frontal.jpg,val,uncertain Consolidation
+train/patient59261/study1/view1_frontal.jpg,val,random
+train/patient59277/study1/view1_frontal.jpg,val,uncertain Consolidation
+train/patient59439/study1/view1_frontal.jpg,val,random
+train/patient59520/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient59526/study4/view1_frontal.jpg,val,random
+train/patient59716/study1/view1_frontal.jpg,val,random
+train/patient59805/study1/view1_frontal.jpg,val,random
+train/patient59959/study1/view1_frontal.jpg,val,uncertain Atelectasis
+train/patient60187/study4/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient60344/study1/view1_frontal.jpg,val,random
+train/patient61143/study1/view1_frontal.jpg,val,uncertain Edema
+train/patient61167/study1/view1_frontal.jpg,val,random
+train/patient61887/study1/view1_frontal.jpg,val,uncertain Cardiomegaly
+train/patient62312/study1/view1_frontal.jpg,val,random
+train/patient62407/study1/view1_frontal.jpg,val,random
+train/patient63560/study1/view1_frontal.jpg,val,random
+train/patient63916/study1/view1_frontal.jpg,val,random
+valid/patient64541/study1/view1_frontal.jpg,test,all test
+valid/patient64542/study1/view1_frontal.jpg,test,all test
+valid/patient64543/study1/view1_frontal.jpg,test,all test
+valid/patient64544/study1/view1_frontal.jpg,test,all test
+valid/patient64545/study1/view1_frontal.jpg,test,all test
+valid/patient64546/study1/view1_frontal.jpg,test,all test
+valid/patient64547/study1/view1_frontal.jpg,test,all test
+valid/patient64547/study1/view2_frontal.jpg,test,all test
+valid/patient64548/study1/view1_frontal.jpg,test,all test
+valid/patient64549/study1/view1_frontal.jpg,test,all test
+valid/patient64550/study1/view1_frontal.jpg,test,all test
+valid/patient64551/study1/view1_frontal.jpg,test,all test
+valid/patient64552/study1/view1_frontal.jpg,test,all test
+valid/patient64553/study1/view1_frontal.jpg,test,all test
+valid/patient64554/study1/view1_frontal.jpg,test,all test
+valid/patient64555/study1/view1_frontal.jpg,test,all test
+valid/patient64556/study1/view1_frontal.jpg,test,all test
+valid/patient64557/study1/view1_frontal.jpg,test,all test
+valid/patient64558/study1/view1_frontal.jpg,test,all test
+valid/patient64559/study1/view1_frontal.jpg,test,all test
+valid/patient64560/study1/view1_frontal.jpg,test,all test
+valid/patient64561/study1/view1_frontal.jpg,test,all test
+valid/patient64562/study1/view1_frontal.jpg,test,all test
+valid/patient64563/study1/view1_frontal.jpg,test,all test
+valid/patient64564/study1/view1_frontal.jpg,test,all test
+valid/patient64565/study1/view1_frontal.jpg,test,all test
+valid/patient64566/study1/view1_frontal.jpg,test,all test
+valid/patient64567/study1/view1_frontal.jpg,test,all test
+valid/patient64568/study1/view1_frontal.jpg,test,all test
+valid/patient64569/study1/view1_frontal.jpg,test,all test
+valid/patient64570/study1/view1_frontal.jpg,test,all test
+valid/patient64571/study1/view1_frontal.jpg,test,all test
+valid/patient64572/study1/view1_frontal.jpg,test,all test
+valid/patient64573/study1/view1_frontal.jpg,test,all test
+valid/patient64574/study1/view1_frontal.jpg,test,all test
+valid/patient64575/study1/view1_frontal.jpg,test,all test
+valid/patient64576/study1/view1_frontal.jpg,test,all test
+valid/patient64577/study1/view1_frontal.jpg,test,all test
+valid/patient64578/study1/view1_frontal.jpg,test,all test
+valid/patient64579/study1/view1_frontal.jpg,test,all test
+valid/patient64580/study1/view1_frontal.jpg,test,all test
+valid/patient64581/study1/view1_frontal.jpg,test,all test
+valid/patient64581/study1/view2_frontal.jpg,test,all test
+valid/patient64582/study1/view1_frontal.jpg,test,all test
+valid/patient64583/study1/view1_frontal.jpg,test,all test
+valid/patient64584/study1/view1_frontal.jpg,test,all test
+valid/patient64585/study1/view1_frontal.jpg,test,all test
+valid/patient64586/study1/view1_frontal.jpg,test,all test
+valid/patient64587/study1/view1_frontal.jpg,test,all test
+valid/patient64588/study1/view1_frontal.jpg,test,all test
+valid/patient64589/study1/view1_frontal.jpg,test,all test
+valid/patient64590/study1/view1_frontal.jpg,test,all test
+valid/patient64591/study1/view1_frontal.jpg,test,all test
+valid/patient64592/study1/view1_frontal.jpg,test,all test
+valid/patient64593/study1/view1_frontal.jpg,test,all test
+valid/patient64594/study1/view1_frontal.jpg,test,all test
+valid/patient64595/study1/view1_frontal.jpg,test,all test
+valid/patient64596/study1/view1_frontal.jpg,test,all test
+valid/patient64597/study1/view1_frontal.jpg,test,all test
+valid/patient64598/study1/view1_frontal.jpg,test,all test
+valid/patient64599/study1/view1_frontal.jpg,test,all test
+valid/patient64600/study1/view1_frontal.jpg,test,all test
+valid/patient64601/study1/view1_frontal.jpg,test,all test
+valid/patient64602/study1/view1_frontal.jpg,test,all test
+valid/patient64603/study1/view1_frontal.jpg,test,all test
+valid/patient64604/study1/view1_frontal.jpg,test,all test
+valid/patient64605/study1/view1_frontal.jpg,test,all test
+valid/patient64606/study1/view1_frontal.jpg,test,all test
+valid/patient64607/study1/view1_frontal.jpg,test,all test
+valid/patient64608/study1/view1_frontal.jpg,test,all test
+valid/patient64609/study1/view1_frontal.jpg,test,all test
+valid/patient64610/study1/view1_frontal.jpg,test,all test
+valid/patient64611/study1/view1_frontal.jpg,test,all test
+valid/patient64612/study1/view1_frontal.jpg,test,all test
+valid/patient64613/study1/view1_frontal.jpg,test,all test
+valid/patient64614/study1/view1_frontal.jpg,test,all test
+valid/patient64615/study1/view1_frontal.jpg,test,all test
+valid/patient64616/study1/view1_frontal.jpg,test,all test
+valid/patient64617/study1/view1_frontal.jpg,test,all test
+valid/patient64618/study1/view1_frontal.jpg,test,all test
+valid/patient64619/study1/view1_frontal.jpg,test,all test
+valid/patient64620/study1/view1_frontal.jpg,test,all test
+valid/patient64621/study1/view1_frontal.jpg,test,all test
+valid/patient64622/study1/view1_frontal.jpg,test,all test
+valid/patient64623/study1/view1_frontal.jpg,test,all test
+valid/patient64624/study1/view1_frontal.jpg,test,all test
+valid/patient64625/study1/view1_frontal.jpg,test,all test
+valid/patient64626/study1/view1_frontal.jpg,test,all test
+valid/patient64627/study1/view1_frontal.jpg,test,all test
+valid/patient64628/study1/view1_frontal.jpg,test,all test
+valid/patient64629/study1/view1_frontal.jpg,test,all test
+valid/patient64630/study1/view1_frontal.jpg,test,all test
+valid/patient64631/study1/view1_frontal.jpg,test,all test
+valid/patient64632/study1/view1_frontal.jpg,test,all test
+valid/patient64633/study1/view1_frontal.jpg,test,all test
+valid/patient64634/study1/view1_frontal.jpg,test,all test
+valid/patient64635/study1/view1_frontal.jpg,test,all test
+valid/patient64636/study1/view1_frontal.jpg,test,all test
+valid/patient64637/study1/view1_frontal.jpg,test,all test
+valid/patient64638/study1/view1_frontal.jpg,test,all test
+valid/patient64639/study1/view1_frontal.jpg,test,all test
+valid/patient64640/study1/view1_frontal.jpg,test,all test
+valid/patient64641/study1/view1_frontal.jpg,test,all test
+valid/patient64642/study1/view1_frontal.jpg,test,all test
+valid/patient64643/study1/view1_frontal.jpg,test,all test
+valid/patient64644/study1/view1_frontal.jpg,test,all test
+valid/patient64645/study1/view1_frontal.jpg,test,all test
+valid/patient64646/study1/view1_frontal.jpg,test,all test
+valid/patient64647/study1/view1_frontal.jpg,test,all test
+valid/patient64648/study1/view1_frontal.jpg,test,all test
+valid/patient64649/study1/view1_frontal.jpg,test,all test
+valid/patient64650/study1/view1_frontal.jpg,test,all test
+valid/patient64651/study1/view1_frontal.jpg,test,all test
+valid/patient64652/study1/view1_frontal.jpg,test,all test
+valid/patient64653/study1/view1_frontal.jpg,test,all test
+valid/patient64654/study1/view1_frontal.jpg,test,all test
+valid/patient64655/study1/view1_frontal.jpg,test,all test
+valid/patient64656/study1/view1_frontal.jpg,test,all test
+valid/patient64657/study1/view1_frontal.jpg,test,all test
+valid/patient64658/study1/view1_frontal.jpg,test,all test
+valid/patient64659/study1/view1_frontal.jpg,test,all test
+valid/patient64660/study1/view1_frontal.jpg,test,all test
+valid/patient64661/study1/view1_frontal.jpg,test,all test
+valid/patient64662/study1/view1_frontal.jpg,test,all test
+valid/patient64663/study1/view1_frontal.jpg,test,all test
+valid/patient64664/study1/view1_frontal.jpg,test,all test
+valid/patient64665/study1/view1_frontal.jpg,test,all test
+valid/patient64666/study1/view1_frontal.jpg,test,all test
+valid/patient64667/study1/view1_frontal.jpg,test,all test
+valid/patient64668/study1/view1_frontal.jpg,test,all test
+valid/patient64669/study1/view1_frontal.jpg,test,all test
+valid/patient64670/study1/view1_frontal.jpg,test,all test
+valid/patient64671/study1/view1_frontal.jpg,test,all test
+valid/patient64672/study1/view1_frontal.jpg,test,all test
+valid/patient64673/study1/view1_frontal.jpg,test,all test
+valid/patient64674/study1/view1_frontal.jpg,test,all test
+valid/patient64675/study1/view1_frontal.jpg,test,all test
+valid/patient64676/study1/view1_frontal.jpg,test,all test
+valid/patient64677/study1/view1_frontal.jpg,test,all test
+valid/patient64678/study1/view1_frontal.jpg,test,all test
+valid/patient64679/study1/view1_frontal.jpg,test,all test
+valid/patient64680/study1/view1_frontal.jpg,test,all test
+valid/patient64681/study1/view1_frontal.jpg,test,all test
+valid/patient64682/study1/view1_frontal.jpg,test,all test
+valid/patient64683/study1/view1_frontal.jpg,test,all test
+valid/patient64684/study1/view1_frontal.jpg,test,all test
+valid/patient64685/study1/view1_frontal.jpg,test,all test
+valid/patient64686/study1/view1_frontal.jpg,test,all test
+valid/patient64687/study1/view1_frontal.jpg,test,all test
+valid/patient64688/study1/view1_frontal.jpg,test,all test
+valid/patient64689/study1/view1_frontal.jpg,test,all test
+valid/patient64690/study1/view1_frontal.jpg,test,all test
+valid/patient64691/study1/view1_frontal.jpg,test,all test
+valid/patient64692/study1/view1_frontal.jpg,test,all test
+valid/patient64693/study1/view1_frontal.jpg,test,all test
+valid/patient64694/study1/view1_frontal.jpg,test,all test
+valid/patient64695/study1/view1_frontal.jpg,test,all test
+valid/patient64696/study1/view1_frontal.jpg,test,all test
+valid/patient64697/study1/view1_frontal.jpg,test,all test
+valid/patient64698/study1/view1_frontal.jpg,test,all test
+valid/patient64699/study1/view1_frontal.jpg,test,all test
+valid/patient64700/study1/view1_frontal.jpg,test,all test
+valid/patient64701/study1/view1_frontal.jpg,test,all test
+valid/patient64702/study1/view1_frontal.jpg,test,all test
+valid/patient64703/study1/view1_frontal.jpg,test,all test
+valid/patient64704/study1/view1_frontal.jpg,test,all test
+valid/patient64705/study1/view1_frontal.jpg,test,all test
+valid/patient64706/study1/view1_frontal.jpg,test,all test
+valid/patient64707/study1/view1_frontal.jpg,test,all test
+valid/patient64708/study1/view1_frontal.jpg,test,all test
+valid/patient64709/study1/view1_frontal.jpg,test,all test
+valid/patient64710/study1/view1_frontal.jpg,test,all test
+valid/patient64711/study1/view1_frontal.jpg,test,all test
+valid/patient64712/study1/view1_frontal.jpg,test,all test
+valid/patient64713/study1/view1_frontal.jpg,test,all test
+valid/patient64714/study1/view1_frontal.jpg,test,all test
+valid/patient64715/study1/view1_frontal.jpg,test,all test
+valid/patient64716/study1/view1_frontal.jpg,test,all test
+valid/patient64717/study1/view1_frontal.jpg,test,all test
+valid/patient64718/study1/view1_frontal.jpg,test,all test
+valid/patient64719/study1/view1_frontal.jpg,test,all test
+valid/patient64720/study1/view1_frontal.jpg,test,all test
+valid/patient64721/study1/view1_frontal.jpg,test,all test
+valid/patient64722/study1/view1_frontal.jpg,test,all test
+valid/patient64723/study1/view1_frontal.jpg,test,all test
+valid/patient64724/study1/view1_frontal.jpg,test,all test
+valid/patient64725/study1/view1_frontal.jpg,test,all test
+valid/patient64726/study1/view1_frontal.jpg,test,all test
+valid/patient64727/study1/view1_frontal.jpg,test,all test
+valid/patient64728/study1/view1_frontal.jpg,test,all test
+valid/patient64729/study1/view1_frontal.jpg,test,all test
+valid/patient64730/study1/view1_frontal.jpg,test,all test
+valid/patient64731/study1/view1_frontal.jpg,test,all test
+valid/patient64732/study1/view1_frontal.jpg,test,all test
+valid/patient64733/study1/view1_frontal.jpg,test,all test
+valid/patient64734/study1/view1_frontal.jpg,test,all test
+valid/patient64735/study1/view1_frontal.jpg,test,all test
+valid/patient64736/study1/view1_frontal.jpg,test,all test
+valid/patient64737/study1/view1_frontal.jpg,test,all test
+valid/patient64738/study1/view1_frontal.jpg,test,all test
+valid/patient64739/study1/view1_frontal.jpg,test,all test
+valid/patient64740/study1/view1_frontal.jpg,test,all test
