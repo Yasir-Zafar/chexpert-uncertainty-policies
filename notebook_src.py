@@ -64,6 +64,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -373,17 +374,22 @@ class RunPusher:
             self.work = None
 
 
-def find_data_root() -> Path:
+def find_data_root(inputs: Path = Path("/kaggle/input")) -> Path:
     """Locate the folder holding CheXpert-small's ``train.csv`` and ``valid.csv``.
 
-    ``DATA_ROOT`` wins when set; on Kaggle the attached inputs are searched otherwise.
+    ``DATA_ROOT`` wins when set. On Kaggle the attached inputs are searched one directory level
+    at a time, down to four levels, stopping at the first level that holds the two files, so the
+    image folders (about 220,000 files) are never walked.
     """
     if os.environ.get("DATA_ROOT"):
         candidates = [Path(os.environ["DATA_ROOT"]).resolve()]
     elif IS_KAGGLE:
-        inputs = Path("/kaggle/input")
-        found = inputs.glob("**/train.csv")
-        candidates = sorted(p.parent for p in found if len(p.relative_to(inputs).parts) <= 5)
+        level, candidates = [inputs], []
+        for _ in range(5):
+            candidates = [d for d in level if (d / "train.csv").is_file()]
+            if candidates:
+                break
+            level = [child for d in level for child in sorted(d.iterdir()) if child.is_dir()]
     else:
         candidates = []
     roots = [c for c in candidates if (c / "train.csv").is_file() and (c / "valid.csv").is_file()]
@@ -1699,6 +1705,33 @@ RUN_DIR = REPO_DIR / RUNS_SUBDIR / RUN_NAME
 CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
 
 
+IO_THREADS = 64  # threads for the cache warm-up; speed only, never affects results
+
+
+def warm_file_cache(paths: list[Path], log: Callable[[str], None]) -> None:
+    """Read every file once so the operating system keeps it in memory for the epochs to come.
+
+    The first read of an image from Kaggle's dataset mount takes about 0.3 s, so four loader
+    workers manage only about 12 images/s, while a cached image costs almost nothing. Waiting
+    for storage uses no CPU, so many threads can overlap the waits: this pass reads in parallel
+    and discards the bytes. Training and its results are unchanged; it only moves the slow
+    first read out of the epoch loop.
+    """
+
+    def read(path: Path) -> int:
+        with open(path, "rb") as f:
+            return len(f.read())
+
+    start, total = time.perf_counter(), 0
+    with ThreadPoolExecutor(IO_THREADS) as pool:
+        for done, size in enumerate(pool.map(read, paths), start=1):
+            total += size
+            if done % 25_000 == 0 or done == len(paths):
+                speed = done / (time.perf_counter() - start)
+                progress = f"{done:,}/{len(paths):,} files, {total / 1e9:.1f} GB"
+                log(f"cache warm-up: {progress}, {speed:.0f} files/s")
+
+
 def environment_info() -> dict:
     """Hardware and library versions recorded with every run."""
     on_gpu = DEVICE.type == "cuda"
@@ -1760,6 +1793,8 @@ if MODE == "train":
     )
     pusher = RunPusher(RUN_DIR, REPO_DIR, SMOKE, RUN_BY, log)
     pusher.claim()  # stops here, before any training, if the branch is taken
+    needed = pd.concat([train_df["path"], val_df["path"], TEST["path"], qual_val["path"]])
+    warm_file_cache([DATA_ROOT / path for path in needed.unique()], log)
     try:
         with GpuTrace(RUN_DIR / "gpu_trace.csv"):
             model, summary = fit(
