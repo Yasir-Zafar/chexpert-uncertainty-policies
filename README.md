@@ -53,7 +53,7 @@ type. These are the settings:
 | Accelerator | GPU T4 x2 (the notebook uses one of the two GPUs; about 120 images/s) |
 | Environment | keep the default; each run records its Python, torch and CUDA versions |
 | Seeds | 42 only, unless the builder announces extra seed layers (43, then 44) |
-| Time per run | about 4.5 hours for 10 epochs, plus a few minutes of cache warm-up at the start |
+| Time per run | about 4.5 hours for 10 epochs, plus about 5 minutes of cache warm-up at the start |
 
 Who runs what (swap freely, the runs are independent):
 
