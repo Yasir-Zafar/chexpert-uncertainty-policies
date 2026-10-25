@@ -71,3 +71,10 @@ smoke: fake
 			|| { tail -25 fake_data/smoke_$$p.log; exit 1; }; \
 	done
 	@ls fake_data/repo/runs_smoke
+
+.PHONY: pushtest
+
+# The GitHub push (C15) against a local bare repository: one smoke run end to end, then the
+# branch rules. Takes about as long as one `make smoke` policy.
+pushtest: fake
+	$(PY) tools/pushtest.py
