@@ -75,7 +75,7 @@
   "torch": "2.11.0+cu128",
   "cuda": "12.8",
   "python": "3.13.15",
-  "status": "trained",
+  "status": "complete",
   "started": "2026-10-25 15:10:23",
   "n_train_images": 171892,
   "n_val_images": 19118,
@@ -86,5 +86,11 @@
   "stop_reason": "early_stop",
   "train_seconds": 14322.175862833996,
   "images_per_sec": 120.01811324511144,
-  "peak_mem_gb": 4.526750208
+  "peak_mem_gb": 4.526750208,
+  "certain_checkpoint_differs": false,
+  "n_val_predictions": 19118,
+  "n_test_predictions": 202,
+  "inference_ms_per_image": 3.1659485718734004,
+  "inference_batch_size": 32,
+  "gflops_per_image": 11.56383744
 }
