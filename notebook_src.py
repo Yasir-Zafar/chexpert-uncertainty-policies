@@ -580,8 +580,13 @@ print(f"validation share {val_share:.2%}; split sha256 {SPLIT_SHA256}")
 COLUMN_WIDTH_IN, PAGE_WIDTH_IN = 3.5, 7.16
 
 
+SAVED = {"tables": [], "figures": []}  # names written so far, listed by the export index
+
+
 def save_table(df: pd.DataFrame, name: str, float_format: str = "%.1f") -> None:
     """Write ``df`` to ``results/tables/<name>.csv`` and ``.tex`` (booktabs)."""
+    if name not in SAVED["tables"]:
+        SAVED["tables"].append(name)
     df.to_csv(TABLES_DIR / f"{name}.csv", index=False)
     latex = df.to_latex(index=False, escape=True, float_format=lambda x: float_format % x)
     (TABLES_DIR / f"{name}.tex").write_text(latex)
@@ -589,6 +594,8 @@ def save_table(df: pd.DataFrame, name: str, float_format: str = "%.1f") -> None:
 
 def save_figure(fig: plt.Figure, name: str) -> None:
     """Write ``fig`` to ``results/figures/<name>.pdf`` and a 300 dpi ``.png``."""
+    if name not in SAVED["figures"]:
+        SAVED["figures"].append(name)
     fig.savefig(FIGURES_DIR / f"{name}.pdf", bbox_inches="tight")
     fig.savefig(FIGURES_DIR / f"{name}.png", dpi=300, bbox_inches="tight")
 
@@ -1310,6 +1317,15 @@ def bootstrap_ci(statistic: Callable[[np.ndarray], float], resamples: list[np.nd
     return statistic(np.arange(n)), float(lo), float(hi)
 
 
+def paired_summary(d: np.ndarray, point: float) -> dict:
+    """Difference ``point`` with its 95% CI and two-sided paired p-value from bootstrap ``d``."""
+    d = d[np.isfinite(d)]
+    b = len(d)
+    p = min(1.0, 2 * min((1 + np.sum(d <= 0)) / (b + 1), (1 + np.sum(d >= 0)) / (b + 1)))
+    lo, hi = np.percentile(d, [2.5, 97.5])
+    return {"diff": float(point), "lo": float(lo), "hi": float(hi), "p": float(p)}
+
+
 def paired_difference(
     stat_a: Callable[[np.ndarray], float],
     stat_b: Callable[[np.ndarray], float],
@@ -1318,12 +1334,8 @@ def paired_difference(
 ) -> dict:
     """Difference A - B with 95% CI and two-sided paired bootstrap p-value."""
     d = np.array([stat_a(idx) - stat_b(idx) for idx in resamples])
-    d = d[np.isfinite(d)]
-    b = len(d)
-    p = min(1.0, 2 * min((1 + np.sum(d <= 0)) / (b + 1), (1 + np.sum(d >= 0)) / (b + 1)))
-    lo, hi = np.percentile(d, [2.5, 97.5])
     full = np.arange(n)
-    return {"diff": stat_a(full) - stat_b(full), "lo": float(lo), "hi": float(hi), "p": p}
+    return paired_summary(d, stat_a(full) - stat_b(full))
 
 
 # Checks: hand-worked values, then agreement with scikit-learn on random data with ties.
@@ -2319,3 +2331,1320 @@ if MODE == "results":
     print(protocol.to_string(index=False))
     extra = "yes" if EXTRA_RUN else "no"
     print(f"analysing seeds {RESULT_SEEDS}: {len(RUNS)} runs, extra run {extra}")
+
+# %% [markdown]
+# ## 4.2 Predictions, labels and bootstrap values
+#
+# Run folders hold image paths, logits and scores but **no labels**; the labels are joined back
+# from the dataset CSVs by image path (every path must be found). The test labels are the
+# radiologist-consensus labels of `valid.csv`; the internal-validation labels keep the original
+# -1 and are used for thresholds, checkpoint selection and the entropy analysis.
+#
+# Score used for each policy in the tables: the sigmoid probability, the softmax P(positive) for
+# U-MultiClass, and for U-Zeros+MC the **mean of the 20 MC Dropout passes** (the dropout-off score
+# is kept for the ablation in T6). F1 uses a threshold per pathology: Youden's J on the validation
+# predictions with the policy's own validation labels.
+#
+# Every metric is computed once per run on the test set and on each of the shared patient-level
+# bootstrap resamples. With several seeds the interval comes from the **seed-averaged**
+# bootstrap: each replicate averages the metric over the seeds on the same resample (predictions
+# are never averaged), and differences pair the same seed across policies.
+
+# %%
+POLICY_LABELS = {
+    "u_zeros": "U-Zeros",
+    "u_ones": "U-Ones",
+    "u_ignore": "U-Ignore",
+    "u_multiclass": "U-MultiClass",
+    "u_ones_lsr": "U-Ones+LSR",
+    "u_zeros_mc": "U-Zeros+MC",
+    "u_zeros_posw": "U-Zeros+PosW",
+}
+# One fixed colour per policy from a palette checked for colour-blind separation of neighbouring
+# colours. Some hues are light on white, so every figure also carries a legend and markers.
+POLICY_COLORS = dict(
+    zip(
+        MAIN_POLICIES,
+        ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"],
+        strict=True,
+    )
+) | {EXTRA_POLICY: "#6b6a66"}
+POLICY_MARKERS = dict(zip(MAIN_POLICIES, "osD^vP", strict=True)) | {EXTRA_POLICY: "X"}
+METRICS = ["AUROC", "AUPRC", "F1", "ECE", "Brier"]
+LOWER_IS_BETTER = {"ECE", "Brier"}
+plt.rcParams.update(
+    {
+        "font.size": 7,
+        "axes.titlesize": 7,
+        "axes.labelsize": 7,
+        "xtick.labelsize": 6,
+        "ytick.labelsize": 6,
+        "legend.fontsize": 6,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.linewidth": 0.6,
+        "lines.linewidth": 1.0,
+        "lines.markersize": 3.5,
+    }
+)
+
+
+@dataclass
+class Preds:
+    """Scores of one run on the validation and test images (the runs store no labels)."""
+
+    val: np.ndarray  # (n_val, 5) scores used in the tables (MC mean for the MC policy)
+    test: np.ndarray
+    val_det: np.ndarray  # dropout-off scores of best.pt (the same as val/test except for MC)
+    test_det: np.ndarray
+    val_cert: np.ndarray  # dropout-off scores of best_certain.pt
+    test_cert: np.ndarray
+    val_logits: np.ndarray
+    test_logits: np.ndarray
+    mc_val: dict | None = None
+    mc_test: dict | None = None
+
+
+def load_arrays(folder: Path, name: str) -> dict[str, np.ndarray]:
+    """All arrays of ``folder/name`` (an .npz written without pickling)."""
+    with np.load(folder / name) as data:
+        return {key: data[key] for key in data.files}
+
+
+def load_preds(run: Run) -> tuple[Preds, np.ndarray]:
+    """Predictions of a run and its validation image paths."""
+    folder, mc = run.dir, POLICIES[run.policy].mc
+    val, test = load_arrays(folder, "val_preds.npz"), load_arrays(folder, "test_preds.npz")
+    differs = run.info.get("certain_checkpoint_differs")
+    cert_val = load_arrays(folder, "val_preds_certain.npz") if differs else val
+    cert_test = load_arrays(folder, "test_preds_certain.npz") if differs else test
+    mc_val = load_arrays(folder, "mc_val.npz") if mc else None
+    mc_test = load_arrays(folder, "mc_test.npz") if mc else None
+    if mc:
+        assert np.array_equal(mc_val["deterministic"], val["scores"]), "MC run: dropout-off differs"
+    preds = Preds(
+        val=mc_val["mean"] if mc else val["scores"],
+        test=mc_test["mean"] if mc else test["scores"],
+        val_det=val["scores"],
+        test_det=test["scores"],
+        val_cert=cert_val["scores"],
+        test_cert=cert_test["scores"],
+        val_logits=val["logits"],
+        test_logits=test["logits"],
+        mc_val=mc_val,
+        mc_test=mc_test,
+    )
+    return preds, val["path"]
+
+
+def youden_thresholds(policy_name: str, val_scores: np.ndarray) -> np.ndarray:
+    """Per-pathology F1 thresholds: Youden's J on validation with the policy's own labels."""
+    labels = POLICIES[policy_name].val_labels(Y_VAL)
+    thresholds = []
+    for j in range(N_PATH):
+        keep = ~np.isnan(labels[:, j])
+        y, s = labels[keep, j], val_scores[keep, j]
+        thresholds.append(youden_threshold(y, s) if 0 < y.sum() < len(y) else 0.5)
+    return np.array(thresholds)
+
+
+def test_metrics(scores: np.ndarray, thresholds: np.ndarray, idx=slice(None)) -> np.ndarray:
+    """(5 metrics, 5 pathologies) on the test rows ``idx``; NaN where a pathology has one class."""
+    out = np.full((len(METRICS), N_PATH), np.nan)
+    for j in range(N_PATH):
+        y, s = Y_TEST[idx, j], scores[idx, j]
+        out[:, j] = [
+            auroc(y, s),
+            auprc(y, s),
+            f1_at(y, s, thresholds[j]),
+            ece(y, s),
+            brier(y, s),
+        ]
+    return out
+
+
+def variant_scores(policy_name: str, preds: Preds, variant: str) -> tuple[np.ndarray, np.ndarray]:
+    """(validation, test) scores of a run variant: main, off (dropout off), cert, renorm."""
+    if variant == "main":
+        return preds.val, preds.test
+    if variant == "off":
+        return preds.val_det, preds.test_det
+    if variant == "cert":
+        return preds.val_cert, preds.test_cert
+    assert variant == "renorm" and policy_name == "u_multiclass", variant
+    both = (preds.val_logits, preds.test_logits)
+    return tuple(multiclass_renormalised(torch.from_numpy(z)).numpy() for z in both)
+
+
+def boot_values(key: tuple[str, int, str]) -> tuple[np.ndarray, np.ndarray]:
+    """Metrics of run variant ``(policy, seed, variant)``: point (5, 5), bootstrap (B, 5, 5)."""
+    if key not in BOOT:
+        policy_name, seed, variant = key
+        val_scores, test_scores = variant_scores(policy_name, PREDS[(policy_name, seed)], variant)
+        thresholds = youden_thresholds(policy_name, val_scores)
+        point = test_metrics(test_scores, thresholds)
+        values = np.stack([test_metrics(test_scores, thresholds, idx) for idx in TEST_BOOT])
+        BOOT[key] = (point, values)
+    return BOOT[key]
+
+
+@dataclass
+class Agg:
+    """A policy variant across the analysed seeds: per-seed points and seed-averaged bootstrap."""
+
+    point_seed: np.ndarray  # (n_seeds, 5 metrics, 5 pathologies)
+    boot: np.ndarray  # (B, 5 metrics, 5 pathologies): mean over seeds on each resample
+
+
+def agg(policy_name: str, variant: str = "main", seeds: list[int] | None = None) -> Agg:
+    """Aggregate a policy variant over ``seeds`` (default: all analysed seeds)."""
+    keys = [(policy_name, s, variant) for s in (seeds or RESULT_SEEDS)]
+    points = np.stack([boot_values(k)[0] for k in keys])
+    values = np.stack([boot_values(k)[1] for k in keys]).mean(axis=0)
+    return Agg(points, values)
+
+
+def pick(arr: np.ndarray, metric: str, j: int | None) -> np.ndarray:
+    """Metric ``metric`` of pathology ``j`` (``None``: mean over the five pathologies)."""
+    x = arr[..., METRICS.index(metric), :]
+    return np.nanmean(x, axis=-1) if j is None else x[..., j]
+
+
+def summary(a: Agg, metric: str, j: int | None = None) -> dict:
+    """Mean over seeds, 95% bootstrap interval and SD across seeds (None for one seed)."""
+    points, boot = pick(a.point_seed, metric, j), pick(a.boot, metric, j)
+    lo, hi = np.nanpercentile(boot, [2.5, 97.5])
+    sd = float(points.std(ddof=1)) if len(points) > 1 else None
+    return {"point": float(points.mean()), "lo": float(lo), "hi": float(hi), "sd": sd}
+
+
+def fmt(s: dict, digits: int = 3) -> str:
+    """``0.812 [0.751, 0.866]`` with ``± sd`` appended when there are several seeds."""
+    text = f"{s['point']:.{digits}f} [{s['lo']:.{digits}f}, {s['hi']:.{digits}f}]"
+    return text + (f" ± {s['sd']:.{digits}f}" if s["sd"] is not None else "")
+
+
+def paired(a: Agg, b: Agg, metric: str, j: int | None = None) -> dict:
+    """A - B for ``metric``: difference, 95% CI, paired p-value and SD over seeds."""
+    d_seed = pick(a.point_seed, metric, j) - pick(b.point_seed, metric, j)
+    d_boot = pick(a.boot, metric, j) - pick(b.boot, metric, j)
+    out = paired_summary(d_boot, d_seed.mean())
+    out["sd"] = float(d_seed.std(ddof=1)) if len(d_seed) > 1 else None
+    return out
+
+
+def fmt_diff(d: dict, digits: int = 3) -> str:
+    """``+0.012 [-0.004, 0.027]`` with ``± sd`` over seeds when there are several."""
+    text = f"{d['diff']:+.{digits}f} [{d['lo']:+.{digits}f}, {d['hi']:+.{digits}f}]"
+    return text + (f" ± {d['sd']:.{digits}f}" if d["sd"] is not None else "")
+
+
+def fmt_p(p: float) -> str:
+    """A p-value to three decimals."""
+    return f"{p:.3f}"
+
+
+def roc_points(y: np.ndarray, s: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """False and true positive rates along the ROC curve, starting at (0, 0)."""
+    _, tps, fps = _sorted_counts(y, s)
+    return np.r_[0, fps / fps[-1]], np.r_[0, tps / tps[-1]]
+
+
+def policy_legend(fig: plt.Figure, policies: list[str], y: float = -0.02) -> None:
+    """One shared legend below ``fig`` with each policy's colour and marker."""
+    handles = [
+        plt.Line2D([], [], color=POLICY_COLORS[p], marker=POLICY_MARKERS[p], label=POLICY_LABELS[p])
+        for p in policies
+    ]
+    fig.legend(
+        handles=handles, loc="lower center", ncol=len(policies), frameon=False,
+        bbox_to_anchor=(0.5, y),
+    )  # fmt: skip
+
+
+if MODE == "results":
+    BOOT: dict[tuple[str, int, str], tuple[np.ndarray, np.ndarray]] = {}
+    USED_RUNS = dict(RUNS) | ({(EXTRA_POLICY, 42): EXTRA_RUN} if EXTRA_RUN else {})
+    PREDS, val_path_sets = {}, {}
+    for key, run in USED_RUNS.items():
+        PREDS[key], val_path_sets[key] = load_preds(run)
+    first_paths = next(iter(val_path_sets.values()))
+    assert all(np.array_equal(first_paths, v) for v in val_path_sets.values()), "val images differ"
+
+    # Labels come from the dataset CSVs, joined by image path (every path must be found).
+    missing_val = set(first_paths) - set(VAL["path"])
+    assert not missing_val, f"validation paths not in the dataset: {sorted(missing_val)[:3]}"
+    VAL_ROWS = VAL.set_index("path").loc[first_paths].reset_index()
+    Y_VAL = label_matrix(VAL_ROWS)  # raw: 1, 0 (negative or not mentioned), -1
+    Y_TEST = label_matrix(TEST).astype(np.float64)  # radiologist consensus: 0 or 1
+    assert set(np.unique(Y_TEST)) <= {0.0, 1.0}
+    for key, preds in PREDS.items():
+        assert preds.val.shape == (len(VAL_ROWS), N_PATH) and preds.test.shape == Y_TEST.shape, key
+
+    n_boot = CONFIG["bootstrap_resamples"]
+    TEST_BOOT = bootstrap_indices(TEST["patient_id"].to_numpy(), n_boot, BOOTSTRAP_SEED)
+    start = time.perf_counter()
+    for key in USED_RUNS:
+        boot_values((*key, "main"))
+    print(
+        f"{len(PREDS)} runs, {len(VAL_ROWS):,} validation and {len(TEST)} test images, "
+        f"{n_boot} patient-level resamples ({time.perf_counter() - start:.0f} s)"
+    )
+    # Cross-check against the independently written metric code: the point estimate of the first
+    # run must equal scikit-learn's AUROC.
+    first_key = next(iter(USED_RUNS))
+    point = BOOT[(*first_key, "main")][0]
+    expected = [roc_auc_score(Y_TEST[:, j], PREDS[first_key].test[:, j]) for j in range(N_PATH)]
+    assert np.allclose(point[0], expected), "AUROC differs from scikit-learn"
+
+# %% [markdown]
+# ## 4.3 E1 to E3: baseline, hard-label policies and beyond (T1, T2, T3, T6, T7)
+#
+# **E1 (baseline).** How well does U-Zeros do under the common protocol? Its rows in T1 and T2.
+#
+# **E2 (hard-label policies).** Do U-Ones, U-Ignore and U-MultiClass beat U-Zeros? T1 gives the
+# mean over the five pathologies of AUROC, AUPRC, F1, ECE and Brier with 95% patient-level
+# bootstrap intervals, T2 the per-pathology AUROC and AUPRC, and T3 the paired AUROC
+# difference against U-Zeros with its interval and paired-bootstrap p-value. The five p-values
+# in each block are **not** corrected for multiple comparisons; read them together with the
+# intervals. The test set holds only about 200 studies, so intervals are wide and small
+# differences are not significant. Figures: ROC overlays and a forest plot of the differences.
+#
+# **E3 (beyond hard labels).** Do label smoothing (U-Ones+LSR) and MC Dropout help? They are
+# rows of the same tables. T6 separates the effect of *training with dropout* from *MC
+# inference*; T7 compares the two U-MultiClass scores.
+
+
+# %%
+def show_table(title: str, table: pd.DataFrame) -> None:
+    """Print ``table`` under a title."""
+    print(f"\n{title}\n{table.to_string(index=False)}")
+
+
+def overall_table() -> pd.DataFrame:
+    """T1: the five metrics averaged over pathologies, per policy, with 95% intervals."""
+    rows = []
+    for name in MAIN_POLICIES:
+        a = agg(name)
+        rows.append({"Policy": POLICY_LABELS[name]} | {m: fmt(summary(a, m)) for m in METRICS})
+    return pd.DataFrame(rows)
+
+
+def by_pathology_table(metric: str) -> pd.DataFrame:
+    """T2: ``metric`` per pathology and on average, per policy, with 95% intervals."""
+    rows = []
+    for name in MAIN_POLICIES:
+        a = agg(name)
+        cells = {PATHOLOGIES[j]: fmt(summary(a, metric, j)) for j in range(N_PATH)}
+        rows.append({"Policy": POLICY_LABELS[name]} | cells | {"Mean": fmt(summary(a, metric))})
+    return pd.DataFrame(rows)
+
+
+def pathology_columns() -> list[tuple[str, int | None]]:
+    """``[("Mean", None), ("Atelectasis", 0), ...]`` for tables and panels."""
+    return [("Mean", None)] + [(PATHOLOGIES[j], j) for j in range(N_PATH)]
+
+
+def paired_table(metric: str = "AUROC") -> pd.DataFrame:
+    """T3: ``metric`` difference to U-Zeros, per policy and pathology, with interval and p."""
+    base, rows = agg("u_zeros"), []
+    for name in MAIN_POLICIES[1:]:
+        for label, j in pathology_columns():
+            d = paired(agg(name), base, metric, j)
+            row = {"Policy": POLICY_LABELS[name], "Pathology": label}
+            rows.append(row | {f"{metric} difference": fmt_diff(d), "p": fmt_p(d["p"])})
+    return pd.DataFrame(rows)
+
+
+def mc_table() -> pd.DataFrame:
+    """T6: the MC Dropout policy with dropout off and with MC inference, against U-Zeros."""
+    base, off, mc = agg("u_zeros"), agg("u_zeros_mc", "off"), agg("u_zeros_mc")
+    rows = []
+    for label, a in [
+        ("U-Zeros (trained without dropout)", base),
+        ("Trained with dropout, dropout off", off),
+        ("Trained with dropout, MC mean (20 passes)", mc),
+    ]:
+        row = {"Setting": label} | {
+            m: fmt(summary(a, m)) for m in ["AUROC", "AUPRC", "ECE", "Brier"]
+        }
+        vs_base = paired(a, base, "AUROC") if a is not base else None
+        vs_off = paired(a, off, "AUROC") if a is mc else None
+        row["AUROC - U-Zeros"] = fmt_diff(vs_base) if vs_base else "-"
+        row["p (U-Zeros)"] = fmt_p(vs_base["p"]) if vs_base else "-"
+        row["AUROC - dropout off"] = fmt_diff(vs_off) if vs_off else "-"
+        row["p (dropout off)"] = fmt_p(vs_off["p"]) if vs_off else "-"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def multiclass_table() -> pd.DataFrame:
+    """T7: U-MultiClass scored by softmax P(pos) and by P(pos) / (P(pos) + P(neg))."""
+    primary, renorm = agg("u_multiclass"), agg("u_multiclass", "renorm")
+    rows = []
+    for label, a in [
+        ("P(positive)  (used in T1-T3)", primary),
+        ("P(pos) / (P(pos) + P(neg))", renorm),
+    ]:
+        row = {"Score": label} | {m: fmt(summary(a, m)) for m in ["AUROC", "AUPRC"]}
+        d = paired(a, primary, "AUROC") if a is renorm else None
+        row["AUROC - P(positive)"] = fmt_diff(d) if d else "-"
+        row["p"] = fmt_p(d["p"]) if d else "-"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_roc_overlay() -> None:
+    """ROC curves of the six policies for each pathology (first analysed seed, test set)."""
+    seed = RESULT_SEEDS[0]
+    fig, axes = plt.subplots(1, N_PATH, figsize=(PAGE_WIDTH_IN, 2.0), sharex=True, sharey=True)
+    for j, ax in enumerate(axes):
+        for name in MAIN_POLICIES:
+            fpr, tpr = roc_points(Y_TEST[:, j], PREDS[(name, seed)].test[:, j])
+            ax.plot(fpr, tpr, color=POLICY_COLORS[name], lw=0.9)
+        ax.plot([0, 1], [0, 1], color="0.7", lw=0.6, ls=":")
+        ax.set_title(PATHOLOGIES[j])
+        ax.set_xlabel("False positive rate")
+        ax.set_aspect("equal")
+    axes[0].set_ylabel("True positive rate")
+    fig.tight_layout()
+    policy_legend(fig, MAIN_POLICIES, y=-0.06)
+    save_figure(fig, "E2_roc_overlay")
+    show_figure(fig)
+
+
+def plot_forest() -> None:
+    """AUROC difference to U-Zeros with 95% intervals: mean and each pathology."""
+    base, others = agg("u_zeros"), MAIN_POLICIES[1:]
+    fig, axes = plt.subplots(1, N_PATH + 1, figsize=(PAGE_WIDTH_IN, 2.2), sharey=True)
+    for ax, (title, j) in zip(axes, pathology_columns(), strict=True):
+        for k, name in enumerate(others):
+            d = paired(agg(name), base, "AUROC", j)
+            err = [[max(d["diff"] - d["lo"], 0)], [max(d["hi"] - d["diff"], 0)]]
+            ax.errorbar(d["diff"], -k, xerr=err, fmt=POLICY_MARKERS[name], capsize=1.5, lw=0.8,
+                        color=POLICY_COLORS[name])  # fmt: skip
+        ax.axvline(0, color="0.5", lw=0.6)
+        ax.set_title(title)
+        ax.set_xlabel("AUROC difference")
+    axes[0].set_yticks([-k for k in range(len(others))], [POLICY_LABELS[n] for n in others])
+    fig.tight_layout()
+    save_figure(fig, "E2_forest_vs_u_zeros")
+    show_figure(fig)
+
+
+if MODE == "results":
+    T1 = overall_table()
+    save_table(T1, "T1_overall")
+    show_table("T1: mean over the five pathologies (95% bootstrap interval; ± SD over seeds)", T1)
+    T2 = by_pathology_table("AUROC")
+    save_table(T2, "T2_auroc_by_pathology")
+    show_table("T2: AUROC per pathology", T2)
+    T2B = by_pathology_table("AUPRC")
+    save_table(T2B, "T2b_auprc_by_pathology")
+    show_table("T2b: AUPRC per pathology", T2B)
+    T3 = paired_table()
+    save_table(T3, "T3_auroc_vs_u_zeros")
+    show_table("T3: AUROC difference to U-Zeros (paired bootstrap, uncorrected p)", T3)
+    plot_roc_overlay()
+    plot_forest()
+    T6 = mc_table()
+    save_table(T6, "T6_mc_dropout_ablation")
+    show_table("T6: MC Dropout, dropout off versus MC inference", T6)
+    T7 = multiclass_table()
+    save_table(T7, "T7_multiclass_scores")
+    show_table("T7: U-MultiClass scores", T7)
+
+# %% [markdown]
+# ## 4.4 E4: generalisation across uncertain prevalence
+#
+# **Purpose.** Which policy gains most where uncertain labels are common? For every pathology the
+# table puts the uncertain prevalence in the analysis training split next to each policy's AUROC
+# difference to U-Zeros (± SD across seeds when there are several), and ranks the six policies.
+# With five pathologies this is descriptive only: no correlation test is run.
+
+
+# %%
+def objective5_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Uncertain prevalence next to each policy's AUROC gain over U-Zeros, and the rank table."""
+    base, rows, ranks = agg("u_zeros"), [], []
+    order = UNCERTAIN_PREVALENCE[PATHOLOGIES].sort_values(ascending=False).index
+    for path in order:
+        j = PATHOLOGIES.index(path)
+        row = {"Pathology": path, "Uncertain (%)": f"{UNCERTAIN_PREVALENCE[path]:.1f}"}
+        auroc_by_policy = {name: summary(agg(name), "AUROC", j)["point"] for name in MAIN_POLICIES}
+        for name in MAIN_POLICIES[1:]:
+            d = paired(agg(name), base, "AUROC", j)
+            row[POLICY_LABELS[name]] = f"{d['diff']:+.3f}" + (
+                f" ± {d['sd']:.3f}" if d["sd"] else ""
+            )
+        best = max(auroc_by_policy, key=auroc_by_policy.get)
+        rows.append(row | {"Best policy": POLICY_LABELS[best]})
+        ordered = sorted(MAIN_POLICIES, key=lambda n: -auroc_by_policy[n])
+        ranks.append(
+            {"Pathology": path, "Uncertain (%)": f"{UNCERTAIN_PREVALENCE[path]:.1f}"}
+            | {POLICY_LABELS[n]: ordered.index(n) + 1 for n in MAIN_POLICIES}
+        )
+    return pd.DataFrame(rows), pd.DataFrame(ranks)
+
+
+def plot_objective5() -> None:
+    """AUROC gain over U-Zeros against the uncertain prevalence of each pathology."""
+    base = agg("u_zeros")
+    fig, ax = plt.subplots(figsize=(COLUMN_WIDTH_IN, 2.6))
+    x = UNCERTAIN_PREVALENCE[PATHOLOGIES].to_numpy()
+    for name in MAIN_POLICIES[1:]:
+        diffs = [paired(agg(name), base, "AUROC", j) for j in range(N_PATH)]
+        y = np.array([d["diff"] for d in diffs])
+        sd = [d["sd"] for d in diffs]
+        order = np.argsort(x)
+        ax.plot(x[order], y[order], color=POLICY_COLORS[name], lw=0.6, alpha=0.6)
+        ax.errorbar(
+            x, y, yerr=None if sd[0] is None else sd, fmt=POLICY_MARKERS[name], capsize=1.5,
+            color=POLICY_COLORS[name], label=POLICY_LABELS[name], lw=0.8,
+        )  # fmt: skip
+    ax.axhline(0, color="0.5", lw=0.6)
+    top = ax.get_ylim()[1]
+    for j, path in enumerate(PATHOLOGIES):
+        ax.annotate(path, (x[j], top), rotation=90, fontsize=5, va="top", ha="right", color="0.3")
+    ax.set_xlabel("Uncertain labels in the training split (%)")
+    ax.set_ylabel("AUROC difference to U-Zeros")
+    ax.legend(loc="lower left", frameon=False, ncol=2)
+    fig.tight_layout()
+    save_figure(fig, "E4_gain_vs_uncertain_prevalence")
+    show_figure(fig)
+
+
+if MODE == "results":
+    T_OBJ5, T_OBJ5_RANK = objective5_tables()
+    save_table(T_OBJ5, "T_objective5_gain_vs_prevalence")
+    show_table(
+        "E4: AUROC difference to U-Zeros by uncertain prevalence (rows: most to least)", T_OBJ5
+    )
+    save_table(T_OBJ5_RANK, "T_objective5_rank")
+    show_table("E4: rank of each policy per pathology (1 = highest AUROC)", T_OBJ5_RANK)
+    plot_objective5()
+
+# %% [markdown]
+# ## 4.5 E5: calibration (T4, reliability diagrams)
+#
+# **Purpose.** Which policy is best calibrated? T4 gives the Expected Calibration Error (10
+# equal-width bins) and the Brier score, averaged over pathologies and per pathology. The
+# reliability diagrams pool the five pathologies for one seed: a calibrated model lies on the
+# diagonal; marker area grows with the number of predictions in the bin.
+
+
+# %%
+def reliability_bins(y: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """(3, bins) mean predicted probability, observed positive rate and count per non-empty bin."""
+    edges = np.linspace(0, 1, CONFIG["ece_bins"] + 1)[1:-1]
+    bins = np.digitize(p, edges, right=True)
+    cells = [(p[bins == b].mean(), y[bins == b].mean(), (bins == b).sum()) for b in np.unique(bins)]
+    return np.array(cells).T
+
+
+def plot_reliability() -> None:
+    """Reliability diagram of each policy (first analysed seed, test set, pathologies pooled)."""
+    seed = RESULT_SEEDS[0]
+    fig, axes = plt.subplots(2, 3, figsize=(PAGE_WIDTH_IN, 4.3), sharex=True, sharey=True)
+    for ax, name in zip(axes.flat, MAIN_POLICIES, strict=True):
+        y, p = Y_TEST.ravel(), PREDS[(name, seed)].test.ravel()
+        mean_p, rate, count = reliability_bins(y, p)
+        assert abs(np.sum(count * np.abs(rate - mean_p)) / len(y) - ece(y, p)) < 1e-9
+        ax.plot([0, 1], [0, 1], color="0.6", lw=0.6, ls=":")
+        ax.plot(mean_p, rate, color=POLICY_COLORS[name], lw=0.8)
+        ax.scatter(mean_p, rate, s=8 + 60 * count / count.max(), color=POLICY_COLORS[name],
+                   marker=POLICY_MARKERS[name], zorder=3)  # fmt: skip
+        ax.set_title(f"{POLICY_LABELS[name]} (ECE {ece(y, p):.3f})")
+        ax.set_aspect("equal")
+    for ax in axes[1]:
+        ax.set_xlabel("Mean predicted probability")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Observed positive rate")
+    fig.tight_layout()
+    save_figure(fig, "E5_reliability")
+    show_figure(fig)
+
+
+if MODE == "results":
+    T4 = T1[["Policy", "ECE", "Brier"]]
+    save_table(T4, "T4_calibration")
+    show_table("T4: calibration (mean over pathologies, 95% bootstrap interval)", T4)
+    T4B = by_pathology_table("ECE")
+    save_table(T4B, "T4b_ece_by_pathology")
+    show_table("T4b: ECE per pathology", T4B)
+    plot_reliability()
+
+# %% [markdown]
+# ## 4.6 E6: does MC Dropout entropy reflect the doubt in the reports?
+#
+# **Purpose.** Is the predictive entropy of the MC Dropout model higher on images whose training
+# label was *uncertain*? The test set has no uncertain labels, so this uses the internal
+# validation images (which keep the original -1): per pathology the images are grouped as
+# negative (including *not mentioned*), positive and uncertain. The table gives the mean
+# entropy per group, the gap *uncertain minus certain* and the AUROC of entropy for telling
+# uncertain from certain images, all with 95% patient-level bootstrap intervals. The figure
+# and intervals use the first analysed seed; the gap of every seed is listed separately.
+
+# %%
+ENTROPY_COLUMNS = ["negative", "positive", "uncertain", "gap", "auroc"]
+
+
+def entropy_stats(entropy: np.ndarray, idx=slice(None)) -> np.ndarray:
+    """(5 pathologies, 5): mean entropy of three label groups, the gap and the entropy AUROC."""
+    out = np.full((N_PATH, len(ENTROPY_COLUMNS)), np.nan)
+    for j in range(N_PATH):
+        e, lab = entropy[idx, j], Y_VAL[idx, j]
+        unc = lab == -1
+        groups = [e[lab == 0], e[lab == 1], e[unc]]
+        means = [g.mean() if len(g) else np.nan for g in groups]
+        if unc.any() and (~unc).any():
+            out[j] = [*means, means[2] - e[~unc].mean(), auroc(unc.astype(int), e)]
+        else:
+            out[j, :3] = means
+    return out
+
+
+def entropy_table(entropy: np.ndarray, resamples: list[np.ndarray]) -> pd.DataFrame:
+    """E6 table with 95% bootstrap intervals for one seed's validation entropy."""
+    point = entropy_stats(entropy)
+    values = np.stack([entropy_stats(entropy, idx) for idx in resamples])
+    lo, hi = np.nanpercentile(values, [2.5, 97.5], axis=0)
+    rows = []
+    for j, path in enumerate(PATHOLOGIES):
+        counts = [(Y_VAL[:, j] == g).sum() for g in (0, 1, -1)]
+        row = {"Pathology": path, "n (neg/pos/unc)": "/".join(str(c) for c in counts)}
+        for k, column in enumerate(ENTROPY_COLUMNS):
+            row[column] = f"{point[j, k]:.3f} [{lo[j, k]:.3f}, {hi[j, k]:.3f}]"
+        rows.append(row)
+    return pd.DataFrame(rows).rename(
+        columns={"gap": "gap (unc - certain)", "auroc": "entropy AUROC"}
+    )
+
+
+def plot_entropy(entropy: np.ndarray) -> None:
+    """Entropy of the three label groups for each pathology."""
+    colors = ["#2a78d6", "#eb6834", "#6250d6"]
+    fig, axes = plt.subplots(1, N_PATH, figsize=(PAGE_WIDTH_IN, 2.0), sharey=True)
+    for j, ax in enumerate(axes):
+        data = [entropy[Y_VAL[:, j] == g, j] for g in (0, 1, -1)]
+        box = ax.boxplot(data, widths=0.6, showfliers=False, patch_artist=True,
+                         medianprops={"color": "black", "lw": 0.8})  # fmt: skip
+        for patch, color in zip(box["boxes"], colors, strict=True):
+            patch.set(facecolor=color, alpha=0.7, lw=0.5)
+        ax.set_xticks([1, 2, 3], ["neg", "pos", "unc"])
+        ax.set_title(PATHOLOGIES[j])
+    axes[0].set_ylabel("Predictive entropy (nats)")
+    fig.tight_layout()
+    save_figure(fig, "E6_entropy_by_label_group")
+    show_figure(fig)
+
+
+if MODE == "results":
+    mc_entropy = {s: PREDS[("u_zeros_mc", s)].mc_val["entropy"] for s in RESULT_SEEDS}
+    val_boot = bootstrap_indices(VAL_ROWS["patient_id"].to_numpy(), n_boot, BOOTSTRAP_SEED)
+    T_ENTROPY = entropy_table(mc_entropy[RESULT_SEEDS[0]], val_boot)
+    save_table(T_ENTROPY, "T_entropy_by_label_group")
+    show_table(f"E6: MC Dropout entropy on validation images (seed {RESULT_SEEDS[0]})", T_ENTROPY)
+    gaps = {f"gap seed {s}": entropy_stats(e)[:, 3] for s, e in mc_entropy.items()}
+    T_ENTROPY_SEEDS = pd.DataFrame(
+        {"Pathology": PATHOLOGIES} | {k: v.round(3) for k, v in gaps.items()}
+    )
+    save_table(T_ENTROPY_SEEDS, "T_entropy_gap_by_seed", float_format="%.3f")
+    show_table("E6: entropy gap (uncertain minus certain) in every seed", T_ENTROPY_SEEDS)
+    plot_entropy(mc_entropy[RESULT_SEEDS[0]])
+
+# %% [markdown]
+# ## 4.7 E7 and E8: computational cost and class weighting (T5, T10)
+#
+# **E7 purpose.** What does each policy cost? T5 lists trainable parameters, hardware, training
+# time (total and per epoch), training throughput, inference time per image, peak GPU memory,
+# GFLOPs per image and mean GPU utilisation, from the numbers each run recorded (mean ± SD over
+# seeds when there are several). T5b compares the cost of MC inference by re-running only
+# dropout and the linear head on cached backbone features with 20 full forward passes.
+#
+# **E8 purpose.** Does positive-class weighting help the baseline (the extra experiment promised
+# in the proposal)? T10 compares `u_zeros_posw` with `u_zeros` at seed 42 only, with one paired
+# difference, so no multiplicity question arises. It is skipped when that run is absent.
+
+
+# %%
+def run_costs(run: Run) -> dict:
+    """Cost figures of one run from its ``run_info.json``, epoch log and GPU trace."""
+    info = run.info
+    epochs = pd.read_csv(run.dir / "metrics_epoch.csv")
+    trace_file = run.dir / "gpu_trace.csv"
+    util = np.nan
+    if trace_file.is_file():
+        util = pd.read_csv(trace_file, skipinitialspace=True)["utilization.gpu"].mean()
+    return {
+        "params_m": info["trainable_params"] / 1e6,
+        "train_h": info["train_seconds"] / 3600,
+        "min_per_epoch": epochs["train_seconds"].mean() / 60,
+        "img_per_s": info["images_per_sec"],
+        "infer_ms": info["inference_ms_per_image"],
+        "peak_gb": info["peak_mem_gb"],
+        "gflops": info["gflops_per_image"],
+        "gpu_util": util,
+        "mc_head_ms": info.get("mc_head_ms_per_image", np.nan),
+    }
+
+
+def mean_sd(values: list[float], digits: int = 2) -> str:
+    """``mean`` or ``mean ± sd`` of ``values``; ``-`` when there is nothing to show."""
+    arr = np.array(values, dtype=float)
+    if np.isnan(arr).all():
+        return "-"
+    text = f"{np.nanmean(arr):.{digits}f}"
+    return text + (f" ± {np.nanstd(arr, ddof=1):.{digits}f}" if len(arr) > 1 else "")
+
+
+def cost_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """T5 (cost per policy) and T5b (cost of MC inference)."""
+    rows, costs_by_policy = [], {}
+    for name in MAIN_POLICIES:
+        runs = [RUNS[(name, s)] for s in RESULT_SEEDS]
+        costs = [run_costs(r) for r in runs]
+        costs_by_policy[name] = costs
+        col = lambda key, costs=costs: [c[key] for c in costs]  # noqa: E731
+        rows.append(
+            {
+                "Policy": POLICY_LABELS[name],
+                "Params (M)": mean_sd(col("params_m")),
+                "GPU": ", ".join(sorted({r.info["gpu_name"] for r in runs})),
+                "Train (h)": mean_sd(col("train_h")),
+                "Min/epoch": mean_sd(col("min_per_epoch")),
+                "Train img/s": mean_sd(col("img_per_s"), 0),
+                "Infer ms/img": mean_sd(col("infer_ms")),
+                "Peak mem (GB)": mean_sd(col("peak_gb")),
+                "GFLOPs/img": mean_sd(col("gflops")),
+                "GPU util (%)": mean_sd(col("gpu_util"), 0),
+            }
+        )
+    mc_costs, passes = costs_by_policy["u_zeros_mc"], CONFIG["mc_passes"]
+    infer = [c["infer_ms"] for c in mc_costs]
+    head = [c["mc_head_ms"] for c in mc_costs]
+    cached = [i + h for i, h in zip(infer, head, strict=True)]
+    naive = [passes * i for i in infer]
+    mc_row = {
+        "Single pass (ms/img)": mean_sd(infer, 3),
+        f"Dropout + head x{passes} (ms/img)": mean_sd(head, 3),
+        "MC, cached backbone (ms/img)": mean_sd(cached, 3),
+        f"MC, {passes} full passes (ms/img)": mean_sd(naive, 3),
+        "Speed-up": mean_sd([n / c for n, c in zip(naive, cached, strict=True)], 1),
+    }
+    return pd.DataFrame(rows), pd.DataFrame([mc_row])
+
+
+def class_weighting_table() -> pd.DataFrame:
+    """T10: u_zeros_posw next to u_zeros at seed 42, with the paired AUROC difference."""
+    base, weighted = agg("u_zeros", seeds=[42]), agg(EXTRA_POLICY, seeds=[42])
+    d = paired(weighted, base, "AUROC")
+    rows = []
+    for name, a in [("u_zeros", base), (EXTRA_POLICY, weighted)]:
+        row = {"Policy": POLICY_LABELS[name]} | {m: fmt(summary(a, m)) for m in METRICS}
+        rows.append(row | {"AUROC - U-Zeros": "-", "p": "-"})
+    rows[1]["AUROC - U-Zeros"], rows[1]["p"] = fmt_diff(d), fmt_p(d["p"])
+    return pd.DataFrame(rows)
+
+
+if MODE == "results":
+    T5, T5B = cost_tables()
+    save_table(T5, "T5_cost")
+    show_table("T5: computational cost (mean ± SD over seeds)", T5)
+    save_table(T5B, "T5b_mc_inference_cost")
+    show_table("T5b: cost of MC Dropout inference", T5B)
+    if EXTRA_RUN is not None:
+        T10 = class_weighting_table()
+        save_table(T10, "T10_class_weighting")
+        show_table("T10: positive-class weights on the baseline (seed 42)", T10)
+    else:
+        print("E8 skipped: the run u_zeros_posw_s42 is not available")
+
+# %% [markdown]
+# ## 4.8 Seed variability and checkpoint selection (T8, T9)
+#
+# **T8** (only with several seeds): per policy the mean AUROC of every seed, its mean, SD and
+# range, and whether the ranking of the six policies is the same in every seed. **T9**: the
+# proposal selects the checkpoint with the best *policy-resolved* validation AUROC, which is a
+# different target for each policy. T9 repeats the comparison with the checkpoint chosen by the
+# policy-independent *certain-only* validation AUROC (dropout off for the MC policy) and shows
+# whether any ranking changes. Headline tables keep the proposal's rule.
+
+
+# %%
+def seed_table() -> tuple[pd.DataFrame, bool]:
+    """T8: mean test AUROC of each policy per seed with spread, and whether rankings agree."""
+    per_seed = {
+        name: [pick(boot_values((name, s, "main"))[0], "AUROC", None) for s in RESULT_SEEDS]
+        for name in MAIN_POLICIES
+    }
+    rows = []
+    for name, values in per_seed.items():
+        row = {"Policy": POLICY_LABELS[name]}
+        row |= {f"seed {s}": f"{v:.3f}" for s, v in zip(RESULT_SEEDS, values, strict=True)}
+        row |= {"Mean": f"{np.mean(values):.3f}", "SD": f"{np.std(values, ddof=1):.3f}"}
+        rows.append(row | {"Range": f"{min(values):.3f} to {max(values):.3f}"})
+    rankings = [
+        tuple(sorted(MAIN_POLICIES, key=lambda n: -per_seed[n][k]))
+        for k in range(len(RESULT_SEEDS))
+    ]
+    return pd.DataFrame(rows), len(set(rankings)) == 1
+
+
+def selection_table() -> tuple[pd.DataFrame, bool]:
+    """T9: mean AUROC with the primary and the certain-only checkpoint, and the two rankings."""
+    primary = {n: summary(agg(n, "off"), "AUROC")["point"] for n in MAIN_POLICIES}
+    certain = {n: summary(agg(n, "cert"), "AUROC")["point"] for n in MAIN_POLICIES}
+    rank = lambda scores: {  # noqa: E731
+        n: i + 1 for i, n in enumerate(sorted(scores, key=lambda n: -scores[n]))
+    }
+    rank_primary, rank_certain = rank(primary), rank(certain)
+    rows = []
+    for name in MAIN_POLICIES:
+        same = sum(
+            RUNS[(name, s)].info["best_epoch"] == RUNS[(name, s)].info["best_certain_epoch"]
+            for s in RESULT_SEEDS
+        )
+        rows.append(
+            {
+                "Policy": POLICY_LABELS[name],
+                "Primary checkpoint": f"{primary[name]:.3f}",
+                "Certain-only checkpoint": f"{certain[name]:.3f}",
+                "Same epoch": f"{same}/{len(RESULT_SEEDS)} runs",
+                "Rank (primary)": rank_primary[name],
+                "Rank (certain-only)": rank_certain[name],
+            }
+        )
+    return pd.DataFrame(rows), rank_primary == rank_certain
+
+
+if MODE == "results":
+    if len(RESULT_SEEDS) > 1:
+        T8, SAME_RANKING = seed_table()
+        save_table(T8, "T8_seed_variability")
+        show_table("T8: mean test AUROC per seed", T8)
+        print(f"ranking of the six policies identical in every seed: {SAME_RANKING}")
+    else:
+        SAME_RANKING = None
+        print("T8 skipped: only one seed is analysed")
+    T9, SELECTION_STABLE = selection_table()
+    save_table(T9, "T9_checkpoint_selection")
+    show_table("T9: checkpoint chosen by policy-resolved versus certain-only validation AUROC", T9)
+    print(f"ranking unchanged by the selection rule: {SELECTION_STABLE}")
+
+# %% [markdown]
+# ## 4.9 Qualitative evaluation
+#
+# All figures come from the saved predictions and activation maps of the first analysed seed
+# (no GPU needed); images are read from the dataset. The same cases are shown for every policy.
+#
+# 1. **Example gallery.** Per pathology, two random test images each of true positives, true
+#    negatives, false positives and false negatives of the *baseline* (fixed seed, at the
+#    baseline's validation threshold), with the probability of every policy in the caption
+#    (Z U-Zeros, O U-Ones, I U-Ignore, M U-MultiClass, L U-Ones+LSR, C U-Zeros+MC).
+# 2. **Activation maps.** For a true positive, a false negative and a false positive of the
+#    baseline, and for one validation image whose label was *uncertain*, the class activation map
+#    of each policy (head weights times the last 10 x 10 feature map, scaled to its own
+#    minimum and maximum, so it shows *where* the model looks and not how strongly).
+# 3. **Behaviour on uncertain-labelled images.** The predicted probability of every policy on
+#    the validation entries whose original label is -1: this shows the effect of the labelling
+#    choice directly.
+# 4. **Confusion matrices** on the test set at each policy's validation Youden threshold.
+# 5. **Failure cases.** The most confident wrong predictions of the baseline and of the best
+#    policy on the test set.
+
+# %%
+POLICY_INITIALS = dict(zip(MAIN_POLICIES, "ZOIMLC", strict=True))
+INITIALS_KEY = " · ".join(f"{POLICY_INITIALS[n]} {POLICY_LABELS[n]}" for n in MAIN_POLICIES)
+
+
+def load_image(path: str) -> np.ndarray:
+    """A dataset image as the model sees it: grayscale, resized to the input size."""
+    return read_image(DATA_ROOT / path, CONFIG["image_size"])
+
+
+def score_caption(scores: dict[str, float]) -> str:
+    """``Z 0.71 O 0.80 I 0.65`` over two lines for the six policies' probabilities."""
+    parts = [f"{POLICY_INITIALS[n]} {scores[n]:.2f}" for n in MAIN_POLICIES]
+    return " ".join(parts[:3]) + "\n" + " ".join(parts[3:])
+
+
+def pick_cases(j: int, rng: np.random.Generator) -> dict[str, np.ndarray]:
+    """Two random test rows each of TP, TN, FP and FN of the baseline for pathology ``j``."""
+    base = PREDS[("u_zeros", QSEED)]
+    positive = Y_TEST[:, j] == 1
+    predicted = base.test[:, j] >= youden_thresholds("u_zeros", base.val)[j]
+    masks = {"TP": positive & predicted, "TN": ~positive & ~predicted,
+             "FP": ~positive & predicted, "FN": positive & ~predicted}  # fmt: skip
+    return {
+        k: rng.choice(np.flatnonzero(m), size=min(2, int(m.sum())), replace=False)
+        for k, m in masks.items()
+    }
+
+
+def plot_gallery(j: int, cases: dict[str, np.ndarray]) -> None:
+    """2 x 4 grid of the selected cases of pathology ``j`` with all policies' probabilities."""
+    fig, axes = plt.subplots(2, 4, figsize=(PAGE_WIDTH_IN, 3.9))
+    slots = [(c, k) for c in ("TP", "TN", "FP", "FN") for k in (0, 1)]
+    for ax, (category, k) in zip(
+        axes.T.flat, slots, strict=True
+    ):  # TP, TN in row 0 / FP, FN in row 1
+        ax.axis("off")
+        if k >= len(cases[category]):
+            continue
+        i = cases[category][k]
+        ax.imshow(load_image(TEST["path"].iloc[i]), cmap="gray")
+        scores = {n: PREDS[(n, QSEED)].test[i, j] for n in MAIN_POLICIES}
+        ax.set_title(f"{category}\n{score_caption(scores)}", fontsize=5.5)
+    fig.suptitle(f"{PATHOLOGIES[j]}: cases of the baseline.  {INITIALS_KEY}", fontsize=6)
+    fig.tight_layout(rect=(0, 0, 1, 0.96), h_pad=2.5)
+    save_figure(fig, f"Q1_gallery_{PATHOLOGIES[j].replace(' ', '_')}")
+    show_figure(fig)
+
+
+def get_cams(name: str, split: str) -> tuple[dict[str, int], np.ndarray]:
+    """Row index by image path and the maps (N, 5, 10, 10) of a run's ``cam_<split>.npz``."""
+    if (name, split) not in CAMS:
+        data = load_arrays(RUNS[(name, QSEED)].dir, f"cam_{split}.npz")
+        CAMS[(name, split)] = ({p: i for i, p in enumerate(data["path"])}, data["cam"])
+    return CAMS[(name, split)]
+
+
+def cam_overlay(ax: plt.Axes, image: np.ndarray, cam: np.ndarray) -> None:
+    """Draw ``image`` with its 10 x 10 activation map, upsampled and scaled to [0, 1]."""
+    size = image.shape[::-1]
+    heat = cv2.resize(cam.astype(np.float32), size, interpolation=cv2.INTER_LINEAR)
+    heat = (heat - heat.min()) / (heat.max() - heat.min() + 1e-8)
+    ax.imshow(image, cmap="gray")
+    ax.imshow(heat, cmap="magma", alpha=0.5)
+    ax.axis("off")
+
+
+def plot_cam_comparison(j: int, cases: dict[str, np.ndarray]) -> None:
+    """Rows: baseline TP, FN, FP and an uncertain validation image; columns: image + 6 policies."""
+    rows = [
+        (c, "test", TEST["path"].iloc[cases[c][0]], f"label {int(Y_TEST[cases[c][0], j])}")
+        for c in ("TP", "FN", "FP")
+        if len(cases[c])
+    ]
+    val_index, _ = get_cams("u_zeros", "val_subset")
+    uncertain = [p for p in val_index if VAL_LABELS.loc[p, PATHOLOGIES[j]] == -1]
+    if uncertain:
+        rows.append(("uncertain", "val_subset", uncertain[0], "label -1"))
+    fig, axes = plt.subplots(
+        len(rows), 7, figsize=(PAGE_WIDTH_IN, 1.05 * len(rows) + 0.5), squeeze=False
+    )
+    for r, (kind, split, path, note) in enumerate(rows):
+        image = load_image(path)
+        axes[r, 0].imshow(image, cmap="gray")
+        axes[r, 0].axis("off")
+        axes[r, 0].text(-0.04, 0.5, f"{kind}\n{note}", transform=axes[r, 0].transAxes,
+                        rotation=90, ha="right", va="center", fontsize=5.5)  # fmt: skip
+        for c, name in enumerate(MAIN_POLICIES, start=1):
+            index, maps = get_cams(name, split)
+            cam_overlay(axes[r, c], image, maps[index[path], j])
+    axes[0, 0].set_title("image", fontsize=6)
+    for c, name in enumerate(MAIN_POLICIES, start=1):
+        axes[0, c].set_title(POLICY_LABELS[name], fontsize=6)
+    fig.suptitle(f"{PATHOLOGIES[j]}: class activation maps", fontsize=6)
+    fig.tight_layout()
+    save_figure(fig, f"Q2_cam_{PATHOLOGIES[j].replace(' ', '_')}")
+    show_figure(fig)
+
+
+def uncertain_probabilities() -> tuple[pd.DataFrame, dict]:
+    """Table and data of each policy's probability on validation entries labelled uncertain."""
+    data = {
+        name: [PREDS[(name, QSEED)].val[Y_VAL[:, j] == -1, j] for j in range(N_PATH)]
+        for name in MAIN_POLICIES
+    }
+    rows = []
+    for j, path in enumerate(PATHOLOGIES):
+        row = {"Pathology": path, "n": len(data["u_zeros"][j])}
+        row |= {
+            POLICY_LABELS[n]: f"{data[n][j].mean():.3f}" if len(data[n][j]) else "-"
+            for n in MAIN_POLICIES
+        }
+        rows.append(row)
+    return pd.DataFrame(rows), data
+
+
+def plot_uncertain_probabilities(data: dict) -> None:
+    """Box plots of the probability on uncertain-labelled validation entries, per pathology."""
+    fig, axes = plt.subplots(1, N_PATH, figsize=(PAGE_WIDTH_IN, 2.1), sharey=True)
+    for j, ax in enumerate(axes):
+        values = [data[n][j] for n in MAIN_POLICIES]
+        if all(len(v) for v in values):
+            box = ax.boxplot(values, widths=0.6, showfliers=False, patch_artist=True,
+                             medianprops={"color": "black", "lw": 0.8})  # fmt: skip
+            for patch, name in zip(box["boxes"], MAIN_POLICIES, strict=True):
+                patch.set(facecolor=POLICY_COLORS[name], alpha=0.8, lw=0.5)
+        ax.set_xticks(range(1, 7), [POLICY_INITIALS[n] for n in MAIN_POLICIES])
+        ax.set_title(f"{PATHOLOGIES[j]} (n={len(values[0])})")
+    axes[0].set_ylabel("Predicted probability")
+    fig.tight_layout()
+    policy_legend(fig, MAIN_POLICIES, y=-0.06)
+    save_figure(fig, "Q3_probability_on_uncertain_labels")
+    show_figure(fig)
+
+
+def confusion_counts(name: str, j: int) -> np.ndarray:
+    """[[TN, FP], [FN, TP]] on the test set at the policy's validation Youden threshold."""
+    preds = PREDS[(name, QSEED)]
+    predicted = preds.test[:, j] >= youden_thresholds(name, preds.val)[j]
+    y = Y_TEST[:, j] == 1
+    return np.array([[(~y & ~predicted).sum(), (~y & predicted).sum()],
+                     [(y & ~predicted).sum(), (y & predicted).sum()]])  # fmt: skip
+
+
+def confusion_table() -> pd.DataFrame:
+    """Long table of confusion counts per policy and pathology."""
+    rows = []
+    for name in MAIN_POLICIES:
+        for j, path in enumerate(PATHOLOGIES):
+            (tn, fp), (fn, tp) = confusion_counts(name, j)
+            rows.append(
+                {
+                    "Policy": POLICY_LABELS[name],
+                    "Pathology": path,
+                    "TN": tn,
+                    "FP": fp,
+                    "FN": fn,
+                    "TP": tp,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def plot_confusion() -> None:
+    """Grid of 2 x 2 confusion matrices: pathologies in rows, policies in columns."""
+    fig, axes = plt.subplots(N_PATH, 6, figsize=(PAGE_WIDTH_IN, 6.4))
+    for j in range(N_PATH):
+        for c, name in enumerate(MAIN_POLICIES):
+            ax, counts = axes[j, c], confusion_counts(name, j)
+            shares = counts / np.maximum(counts.sum(axis=1, keepdims=True), 1)
+            ax.imshow(shares, cmap="Blues", vmin=0, vmax=1)
+            for (r, k), value in np.ndenumerate(counts):
+                ax.text(k, r, str(value), ha="center", va="center", fontsize=6,
+                        color="white" if shares[r, k] > 0.6 else "black")  # fmt: skip
+            ax.set_xticks([0, 1], ["neg", "pos"] if j == N_PATH - 1 else ["", ""])
+            ax.set_yticks([0, 1], ["neg", "pos"] if c == 0 else ["", ""])
+            ax.tick_params(length=0)
+            ax.spines[:].set_visible(False)
+            if j == 0:
+                ax.set_title(POLICY_LABELS[name], fontsize=6)
+        axes[j, 0].set_ylabel(PATHOLOGIES[j].replace(" ", "\n"), fontsize=6)
+    fig.tight_layout(rect=(0, 0.02, 1, 1))
+    note = "Rows: radiologist label. Columns: prediction at the validation Youden threshold."
+    fig.text(0.5, 0.0, note, ha="center", fontsize=6)
+    save_figure(fig, "Q4_confusion_matrices")
+    show_figure(fig)
+
+
+def confident_errors(name: str, top: int = 5) -> pd.DataFrame:
+    """The ``top`` most confident wrong test predictions of a policy over all pathologies."""
+    preds = PREDS[(name, QSEED)]
+    thresholds = youden_thresholds(name, preds.val)
+    predicted = preds.test >= thresholds
+    wrong = predicted != (Y_TEST == 1)
+    confidence = np.where(wrong, np.where(predicted, preds.test, 1 - preds.test), -1.0)
+    rows = []
+    for rank, flat in enumerate(np.argsort(-confidence, axis=None)[:top], start=1):
+        i, j = np.unravel_index(flat, confidence.shape)
+        if confidence[i, j] < 0:
+            break
+        row = {"Policy": POLICY_LABELS[name], "Rank": rank, "Image": TEST["path"].iloc[i]}
+        row |= {"Pathology": PATHOLOGIES[j], "Label": int(Y_TEST[i, j])}
+        rows.append(row | {"Score": round(float(preds.test[i, j]), 3)})
+    return pd.DataFrame(rows)
+
+
+def plot_failures(errors: pd.DataFrame) -> None:
+    """Images of the confident errors: one row per policy."""
+    names = list(dict.fromkeys(errors["Policy"]))
+    fig, axes = plt.subplots(
+        len(names), 5, figsize=(PAGE_WIDTH_IN, 1.7 * len(names) + 0.3), squeeze=False
+    )
+    for ax in axes.flat:
+        ax.axis("off")
+    for r, policy in enumerate(names):
+        for c, row in enumerate(errors[errors["Policy"] == policy].itertuples()):
+            axes[r, c].imshow(load_image(row.Image), cmap="gray")
+            axes[r, c].set_title(
+                f"{row.Pathology}\nlabel {row.Label}, score {row.Score:.2f}", fontsize=5.5
+            )
+        axes[r, 0].text(-0.04, 0.5, policy, transform=axes[r, 0].transAxes, rotation=90,
+                        ha="right", va="center", fontsize=6)  # fmt: skip
+    fig.suptitle("Most confident wrong test predictions", fontsize=6)
+    fig.tight_layout()
+    save_figure(fig, "Q5_failure_cases")
+    show_figure(fig)
+
+
+if MODE == "results":
+    QSEED = RESULT_SEEDS[0]
+    CAMS: dict[tuple[str, str], tuple[dict[str, int], np.ndarray]] = {}
+    VAL_LABELS = pd.DataFrame(label_matrix(VAL), index=VAL["path"], columns=PATHOLOGIES)
+    case_rng = np.random.default_rng(BOOTSTRAP_SEED)
+    for j in range(N_PATH):
+        cases = pick_cases(j, case_rng)
+        plot_gallery(j, cases)
+        plot_cam_comparison(j, cases)
+    T_UNC, unc_data = uncertain_probabilities()
+    save_table(T_UNC, "Q3_probability_on_uncertain_labels")
+    show_table(
+        f"Mean predicted probability on validation entries labelled uncertain (seed {QSEED})", T_UNC
+    )
+    plot_uncertain_probabilities(unc_data)
+    T_CONF = confusion_table()
+    save_table(T_CONF, "Q4_confusion_counts")
+    plot_confusion()
+    point = {n: summary(agg(n), "AUROC")["point"] for n in MAIN_POLICIES}
+    ranked = sorted(MAIN_POLICIES, key=lambda n: -point[n])
+    best_policy = ranked[0] if ranked[0] != "u_zeros" else ranked[1]
+    errors = pd.concat(
+        [confident_errors("u_zeros"), confident_errors(best_policy)], ignore_index=True
+    )
+    save_table(errors, "Q5_failure_cases")
+    show_table("Most confident wrong test predictions", errors)
+    plot_failures(errors)
+
+# %% [markdown]
+# ## 4.10 Training record of every run
+#
+# Each run trained in its own notebook, but only this notebook is submitted, so the training
+# record of **all** runs is rebuilt here from the files each run pushed (`metrics_epoch.csv`,
+# `train.log`, `grad_stats.csv`, `gpu_trace.csv`, `run_info.json`): the per-epoch table, the
+# stopping reason, the beginning and end of the training log and the gradient and GPU summaries
+# of every policy (and the extra class-weighting run), then training curves of all policies on
+# shared axes. With several seeds the tables show the first seed, the curves show the mean over
+# seeds with the minimum-to-maximum band, and the long table `T_training_record` lists every run.
+
+# %%
+EPOCH_COLUMNS = ["epoch", "train_loss", "val_auroc", "val_auroc_certain", "lr", "train_seconds",
+                 "images_per_sec", "peak_mem_gb"]  # fmt: skip
+
+
+def load_training(run: Run) -> pd.DataFrame:
+    """The per-epoch log of a run with a ``run`` column."""
+    frame = pd.read_csv(run.dir / "metrics_epoch.csv")
+    frame.insert(0, "run", run.name)
+    return frame
+
+
+def print_training_record(run: Run) -> None:
+    """Epoch table, stopping reason, log excerpt and gradient/GPU summaries of one run."""
+    info = run.info
+    who = f"run by {info['run_by']} on {info['gpu_name']}"
+    print(f"\n=== {run.name} ({POLICY_LABELS[run.policy]}), {who} ===")
+    print(
+        f"best epoch {info['best_epoch']} of {info['epochs_run']} run, "
+        f"stopped by {info['stop_reason']}; trained {info['train_seconds'] / 60:.1f} min "
+        f"at {info['images_per_sec']:.0f} images/s"
+    )
+    print(load_training(run)[EPOCH_COLUMNS].to_string(index=False, float_format="%.4f"))
+    grads = pd.read_csv(run.dir / "grad_stats.csv")
+    if len(grads):
+        norm = grads["grad_norm"]
+        print(
+            f"gradient norm: median {norm.median():.2f}, max {norm.max():.2f}; "
+            f"loss scale: min {grads['loss_scale'].min():.0f}"
+        )
+    trace_file = run.dir / "gpu_trace.csv"
+    if trace_file.is_file():
+        trace = pd.read_csv(trace_file, skipinitialspace=True)
+        print(
+            f"GPU: utilisation {trace['utilization.gpu'].mean():.0f}% on average, "
+            f"memory up to {trace['memory.used'].max() / 1024:.1f} GiB"
+        )
+    lines = (run.dir / "train.log").read_text().splitlines()
+    print("log:", *lines[:2], "  ...", *lines[-2:], sep="\n  ")
+
+
+def seed_band(
+    frames: list[pd.DataFrame], column: str
+) -> tuple[list[int], list[float], list[float], list[float]]:
+    """Epochs with the mean, minimum and maximum of ``column`` over the runs that reached them."""
+    epochs = sorted(set().union(*[set(f["epoch"]) for f in frames]))
+    values = [
+        [f.loc[f["epoch"] == e, column].iloc[0] for f in frames if e in set(f["epoch"])]
+        for e in epochs
+    ]
+    return epochs, [np.mean(v) for v in values], [min(v) for v in values], [max(v) for v in values]
+
+
+def plot_training_curves() -> None:
+    """Validation AUROC of all policies on shared axes, and each policy's training loss."""
+    logs = {n: [load_training(RUNS[(n, s)]) for s in RESULT_SEEDS] for n in MAIN_POLICIES}
+    fig, axes = plt.subplots(1, 2, figsize=(PAGE_WIDTH_IN, 2.4), sharex=True)
+    for ax, column, title in [
+        (axes[0], "val_auroc", "Validation mean AUROC (policy-resolved labels)"),
+        (axes[1], "val_auroc_certain", "Validation mean AUROC (certain labels only)"),
+    ]:
+        for name in MAIN_POLICIES:
+            epochs, mean, low, high = seed_band(logs[name], column)
+            ax.plot(epochs, mean, color=POLICY_COLORS[name], marker=POLICY_MARKERS[name], lw=0.9)
+            if len(RESULT_SEEDS) > 1:
+                ax.fill_between(epochs, low, high, color=POLICY_COLORS[name], alpha=0.15, lw=0)
+        ax.set_title(title)
+        ax.set_xlabel("Epoch")
+    axes[0].set_ylabel("AUROC")
+    fig.tight_layout()
+    policy_legend(fig, MAIN_POLICIES, y=-0.07)
+    save_figure(fig, "T_training_curves_val_auroc")
+    show_figure(fig)
+
+    fig, axes = plt.subplots(2, 3, figsize=(PAGE_WIDTH_IN, 3.6), sharex=True)
+    for ax, name in zip(axes.flat, MAIN_POLICIES, strict=True):
+        epochs, mean, low, high = seed_band(logs[name], "train_loss")
+        ax.plot(epochs, mean, color=POLICY_COLORS[name], marker=POLICY_MARKERS[name], lw=0.9)
+        if len(RESULT_SEEDS) > 1:
+            ax.fill_between(epochs, low, high, color=POLICY_COLORS[name], alpha=0.15, lw=0)
+        ax.set_title(POLICY_LABELS[name])
+    for ax in axes[1]:
+        ax.set_xlabel("Epoch")
+    axes[0, 0].set_ylabel("Training loss (each policy's own loss)")
+    fig.tight_layout()
+    save_figure(fig, "T_training_curves_loss")
+    show_figure(fig)
+
+
+if MODE == "results":
+    shown_runs = [RUNS[(n, RESULT_SEEDS[0])] for n in MAIN_POLICIES] + (
+        [EXTRA_RUN] if EXTRA_RUN else []
+    )
+    for run in shown_runs:
+        print_training_record(run)
+    record = pd.concat([load_training(r) for r in USED_RUNS.values()], ignore_index=True)
+    save_table(record, "T_training_record", float_format="%.4f")
+    print(f"\nT_training_record: {len(record)} epoch rows from {len(USED_RUNS)} runs")
+    plot_training_curves()
+
+# %% [markdown]
+# ## 4.11 Export index
+#
+# Every table was written as CSV and LaTeX (`booktabs`) and every figure as vector PDF and a
+# 300 dpi PNG at the moment it was made, into `results/tables/` and `results/figures/`. This
+# cell checks that every file exists and lists what was produced.
+
+
+# %%
+def export_index() -> pd.DataFrame:
+    """One row per exported table and figure; fails if any file is missing."""
+    rows = []
+    for kind, names, directory, suffixes in [
+        ("table", SAVED["tables"], TABLES_DIR, (".csv", ".tex")),
+        ("figure", SAVED["figures"], FIGURES_DIR, (".pdf", ".png")),
+    ]:
+        for name in names:
+            files = [directory / f"{name}{suffix}" for suffix in suffixes]
+            missing = [f.name for f in files if not f.is_file()]
+            assert not missing, f"export incomplete: {missing}"
+            kb = sum(f.stat().st_size for f in files) / 1024
+            rows.append(
+                {"kind": kind, "name": name, "files": ", ".join(suffixes), "kB": f"{kb:.0f}"}
+            )
+    return pd.DataFrame(rows)
+
+
+if MODE == "results":
+    EXPORT = export_index()
+    print(EXPORT.to_string(index=False))
+    n_tables, n_figures = len(SAVED["tables"]), len(SAVED["figures"])
+    print(f"\n{n_tables} tables and {n_figures} figures written to {REPO_DIR / 'results'}")
+
+# %% [markdown]
+# ## 4.12 Findings
+#
+# Sentences with the numbers generated from the results above, so the paper can quote them
+# without retyping. They report what the data show, including intervals that contain zero; the
+# test set has only a few hundred images, so most differences between policies are small
+# compared with their uncertainty. P-values are paired-bootstrap p-values, **not** corrected for
+# the five comparisons per row.
+
+
+# %%
+def excludes_zero(d: dict) -> bool:
+    """True if the 95% interval of a paired difference does not contain zero."""
+    return d["lo"] > 0 or d["hi"] < 0
+
+
+def side(d: dict) -> str:
+    """``excludes`` or ``includes`` zero for the interval of a paired difference."""
+    return "excludes" if excludes_zero(d) else "includes"
+
+
+def build_findings() -> list[str]:
+    """Plain-language findings with the numbers behind them."""
+    label, base = POLICY_LABELS, agg("u_zeros")
+    out = [
+        f"Protocol: {len(RESULT_SEEDS)} seed(s) {RESULT_SEEDS}; test set of {len(TEST)} images "
+        f"from {TEST['patient_id'].nunique()} patients; {n_boot} patient-level bootstrap resamples."
+    ]
+    point = {n: summary(agg(n), "AUROC")["point"] for n in MAIN_POLICIES}
+    best = max(point, key=point.get)
+    out.append(
+        f"Highest mean AUROC: {label[best]} {fmt(summary(agg(best), 'AUROC'))}; "
+        f"the U-Zeros baseline has {fmt(summary(base, 'AUROC'))}."
+    )
+    diffs = {n: paired(agg(n), base, "AUROC") for n in MAIN_POLICIES[1:]}
+    for name, d in diffs.items():
+        verdict = "below" if d["p"] < 0.05 else "not below"
+        out.append(
+            f"{label[name]} versus U-Zeros, mean AUROC {fmt_diff(d)}: the interval {side(d)} zero "
+            f"(p = {fmt_p(d['p'])}, {verdict} 0.05, uncorrected)."
+        )
+    big = max(diffs, key=lambda n: diffs[n]["diff"])
+    small = min(diffs, key=lambda n: diffs[n]["diff"])
+    out.append(
+        f"Largest mean AUROC change over U-Zeros: {label[big]} ({diffs[big]['diff']:+.3f}); "
+        f"smallest: {label[small]} ({diffs[small]['diff']:+.3f})."
+    )
+    for j, path in enumerate(PATHOLOGIES):
+        by_policy = {n: summary(agg(n), "AUROC", j)["point"] for n in MAIN_POLICIES}
+        top = max(by_policy, key=by_policy.get)
+        head = f"{path} ({UNCERTAIN_PREVALENCE[path]:.1f}% uncertain): "
+        if top == "u_zeros":
+            out.append(f"{head}U-Zeros has the highest AUROC ({by_policy[top]:.3f}).")
+            continue
+        d = paired(agg(top), base, "AUROC", j)
+        out.append(
+            f"{head}highest AUROC {label[top]} ({by_policy[top]:.3f}), {fmt_diff(d)} versus "
+            f"U-Zeros; the interval {side(d)} zero (p = {fmt_p(d['p'])})."
+        )
+    for metric in ("ECE", "Brier"):
+        values = {n: summary(agg(n), metric)["point"] for n in MAIN_POLICIES}
+        low = min(values, key=values.get)
+        out.append(
+            f"Best calibrated by {metric}: {label[low]} ({values[low]:.3f}); "
+            f"U-Zeros {values['u_zeros']:.3f}."
+        )
+    mc = paired(agg("u_zeros_mc"), agg("u_zeros_mc", "off"), "AUROC")
+    out.append(
+        f"MC inference versus dropout off, mean AUROC {fmt_diff(mc)} (p = {fmt_p(mc['p'])})."
+    )
+    gaps = entropy_stats(mc_entropy[RESULT_SEEDS[0]])[:, 3]
+    out.append(
+        f"MC entropy gap (uncertain minus certain, seed {RESULT_SEEDS[0]}) is positive for "
+        f"{int((gaps > 0).sum())} of {N_PATH} pathologies "
+        f"(range {np.nanmin(gaps):+.3f} to {np.nanmax(gaps):+.3f})."
+    )
+    if EXTRA_RUN is not None:
+        d = paired(agg(EXTRA_POLICY, seeds=[42]), agg("u_zeros", seeds=[42]), "AUROC")
+        out.append(
+            f"Positive-class weights on the baseline (seed 42): mean AUROC {fmt_diff(d)} "
+            f"(p = {fmt_p(d['p'])})."
+        )
+    if SAME_RANKING is not None:
+        same = "the same" if SAME_RANKING else "not the same"
+        out.append(f"The ranking of the six policies is {same} in every seed.")
+    changes = "does not change" if SELECTION_STABLE else "changes"
+    out.append(f"Choosing the checkpoint by certain-only validation AUROC {changes} the ranking.")
+    return out
+
+
+if MODE == "results":
+    FINDINGS = build_findings()
+    for line in FINDINGS:
+        print(f"- {line}")
+    (REPO_DIR / "results" / "findings.txt").write_text("\n".join(FINDINGS) + "\n")
