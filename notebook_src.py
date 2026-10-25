@@ -58,6 +58,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -165,6 +166,10 @@ else:
 # (by any teammate, at any time) reads the same committed split and qualitative-id files.
 # Git commands that talk to GitHub receive the token as a per-command HTTP header, never in
 # the URL or the git config, and every line of git output is scrubbed of it before printing.
+#
+# `RunPusher` publishes a run folder to its own branch (`run/<policy>_s<seed>`) from a
+# throw-away repository, so the push can only ever contain that folder. It is used by the
+# training run (sections 3.2 and 3.4).
 
 # %%
 IS_KAGGLE = Path("/kaggle/input").is_dir()
@@ -202,6 +207,9 @@ def scrub(text: str) -> str:
     return text
 
 
+assert not any(s in scrub(f"x {GITHUB_PAT} {_AUTH_HEADER} y") for s in _SECRETS), "scrub leaks"
+
+
 def run_git(*args: str, cwd: Path | None = None, auth: bool = False) -> str:
     """Run a git command and return its scrubbed output; raise with scrubbed output on failure.
 
@@ -219,15 +227,148 @@ def run_git(*args: str, cwd: Path | None = None, auth: bool = False) -> str:
     return out
 
 
+def remote_url() -> str:
+    """URL of the GitHub repository; the ``REMOTE_URL`` variable overrides it (local tests)."""
+    if os.environ.get("REMOTE_URL"):
+        return os.environ["REMOTE_URL"]
+    assert GITHUB_REPO, "Kaggle Secret GITHUB_REPO (owner/name) is not set"
+    return f"https://github.com/{GITHUB_REPO}.git"
+
+
 def clone_repo(ref: str, dest: Path) -> Path:
     """Shallow-clone ``GITHUB_REPO`` at tag or branch ``ref`` into ``dest`` (reused if present)."""
-    assert GITHUB_REPO, "Kaggle Secret GITHUB_REPO (owner/name) is not set"
     if not (dest / ".git").is_dir():
-        url = f"https://github.com/{GITHUB_REPO}.git"
-        run_git("clone", "--depth", "1", "--branch", ref, url, str(dest), auth=True)
+        run_git("clone", "--depth", "1", "--branch", ref, remote_url(), str(dest), auth=True)
     head = run_git("rev-parse", "--short", "HEAD", cwd=dest).strip()
     print(f"repo {GITHUB_REPO} at {ref} ({head}) in {dest}")
     return dest
+
+
+PUSH_SUFFIXES = {".json", ".csv", ".log", ".npz"}  # nothing else may leave the notebook
+PUSH_MAX_MB = 25
+
+
+class RunPusher:
+    """Pushes one run folder to its own orphan branch, never touching ``main`` or any code.
+
+    The branch is ``run/<policy>_s<seed>`` (``smoke/...`` for a smoke pass) and holds only the
+    run folder, committed from a throw-away repository outside the working directory. ``claim``
+    makes the first push and refuses a run branch that already exists, so two people who picked
+    the same policy and seed cannot overwrite each other. Every later push is a plain
+    fast-forward. Smoke branches are disposable and are simply overwritten.
+    """
+
+    def __init__(
+        self, run_dir: Path, repo_dir: Path, smoke: bool, who: str, log: Callable[[str], None]
+    ) -> None:
+        self.run_dir, self.smoke, self.who, self.log = run_dir, smoke, who, log
+        self.rel = run_dir.relative_to(repo_dir).as_posix()  # path inside the branch
+        self.branch = f"{'smoke' if smoke else 'run'}/{run_dir.name}"
+        self.enabled = bool(os.environ.get("REMOTE_URL") or (GITHUB_PAT and GITHUB_REPO))
+        self.work: Path | None = None
+
+    def claim(self) -> None:
+        """Check the branch is free, create the throw-away repository and push the first state."""
+        if not self.enabled:
+            if IS_KAGGLE:
+                raise RuntimeError(
+                    "Kaggle Secrets GITHUB_PAT and GITHUB_REPO are not both set, so this run could "
+                    "not be pushed. Attach them (Add-ons > Secrets) and run again."
+                )
+            self.log(
+                "push skipped: no GITHUB_PAT/GITHUB_REPO; outputs stay in the working directory"
+            )
+            return
+        url = remote_url()
+        if (
+            not self.smoke
+            and run_git("ls-remote", "--heads", url, f"refs/heads/{self.branch}", auth=True).strip()
+        ):
+            raise RuntimeError(
+                f"branch {self.branch} already exists on the remote: someone has already started "
+                "this policy and seed. Pick another policy or seed, or ask the builder to delete "
+                "the branch if that run failed (a fixed run needs a new version tag)."
+            )
+        self.work = Path(tempfile.mkdtemp(prefix="push_"))
+        run_git("init", "-q", "-b", self.branch, str(self.work))
+        for key, value in [
+            ("user.name", self.who),
+            ("user.email", f"{self.who}@users.noreply.github.com"),
+            ("commit.gpgsign", "false"),
+            # Behave the same on every machine: a global ignore file (for example `*.log`)
+            # would silently drop run files, and global hooks have no business here.
+            ("core.excludesFile", os.devnull),
+            ("core.hooksPath", os.devnull),
+        ]:
+            run_git("config", key, value, cwd=self.work)
+        run_git("remote", "add", "origin", url, cwd=self.work)
+        self.push(f"{self.run_dir.name}: started", strict=True, force=self.smoke)
+        self.log(f"pushing to branch {self.branch} of {url}")
+
+    def _commit(self, message: str) -> None:
+        """Copy the run folder into the repository after checking it is safe, and commit."""
+        files = sorted(self.run_dir.iterdir())
+        bad = [f.name for f in files if f.suffix not in PUSH_SUFFIXES or not f.is_file()]
+        assert not bad, f"refusing to push {bad}: only {sorted(PUSH_SUFFIXES)} files may be pushed"
+        size_mb = sum(f.stat().st_size for f in files) / 1e6
+        assert size_mb < PUSH_MAX_MB, (
+            f"run folder is {size_mb:.1f} MB, over the {PUSH_MAX_MB} MB cap"
+        )
+        secrets = [s.encode() for s in _SECRETS]
+        leaked = [f.name for f in files if any(s in f.read_bytes() for s in secrets)]
+        assert not leaked, f"refusing to push {leaked}: contains the GitHub token"
+        dest = self.work / self.rel
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(self.run_dir, dest)
+        run_git("add", "-A", cwd=self.work)
+        if run_git("status", "--porcelain", cwd=self.work).strip():
+            run_git("commit", "-q", "-m", message, cwd=self.work)
+
+    def push(self, message: str, strict: bool = False, force: bool = False) -> bool:
+        """Commit the run folder and push it; True on success.
+
+        With ``strict=False`` a failure only logs a warning, so a network blip never kills a
+        training run; with ``strict=True`` the push is tried three times and then raises.
+        """
+        if self.work is None:
+            return False
+        assert not force or self.smoke, "only smoke branches may be overwritten"
+        try:
+            self._commit(message)
+            for attempt in range(3 if strict else 1):
+                try:
+                    cmd = ["push", "-q", *(["--force"] if force else [])]
+                    run_git(
+                        *cmd, "origin", f"HEAD:refs/heads/{self.branch}", cwd=self.work, auth=True
+                    )
+                    return True
+                except RuntimeError:
+                    if attempt == 2 or not strict:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+        except Exception as err:
+            if strict:
+                raise
+            self.log(f"warning: push to {self.branch} failed, the run continues: {err}")
+        return False
+
+    def verify(self) -> str:
+        """Check the remote branch is at our last commit and holds exactly the run folder."""
+        head = run_git("rev-parse", "HEAD", cwd=self.work).strip()
+        out = run_git("ls-remote", "origin", f"refs/heads/{self.branch}", cwd=self.work, auth=True)
+        assert out.split()[:1] == [head], f"remote {self.branch} is not at the pushed commit"
+        tree = run_git("ls-tree", "-r", "--name-only", "HEAD", cwd=self.work).split()
+        expected = {f"{self.rel}/{f.name}" for f in self.run_dir.iterdir()}
+        assert set(tree) == expected, (
+            f"pushed files differ from the run folder: {set(tree) ^ expected}"
+        )
+        return head[:10]
+
+    def close(self) -> None:
+        """Delete the throw-away repository."""
+        if self.work is not None:
+            shutil.rmtree(self.work, ignore_errors=True)
+            self.work = None
 
 
 def find_data_root() -> Path:
@@ -1533,6 +1674,9 @@ print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for ev
 # mid-way therefore never looks finished.
 #
 # Checkpoints go to `checkpoints/`, which is never pushed.
+#
+# The run claims its GitHub branch before training starts (see `RunPusher` in section 0.3) and
+# pushes the folder after every epoch, so a session that dies still leaves its history there.
 
 # %%
 RUN_NAME = f"{POLICY}_s{SEED}"
@@ -1599,6 +1743,8 @@ if MODE == "train":
         n_train_images=len(train_df),
         n_val_images=len(val_df),
     )
+    pusher = RunPusher(RUN_DIR, REPO_DIR, SMOKE, RUN_BY, log)
+    pusher.claim()  # stops here, before any training, if the branch is taken
     try:
         with GpuTrace(RUN_DIR / "gpu_trace.csv"):
             model, summary = fit(
@@ -1610,13 +1756,16 @@ if MODE == "train":
                 RUN_DIR,
                 CKPT_DIR,
                 log,
+                on_epoch_end=lambda: pusher.push(f"{RUN_NAME}: epoch log"),
             )
     except Exception as err:
         log(f"FAILED: {err!r}")
         write_run_info("failed", failure=repr(err))
+        pusher.push(f"{RUN_NAME}: failed")
         raise
     info = write_run_info("trained", trainable_params=count_trainable_params(model), **summary)
     log(f"trained: best epoch {info['best_epoch']} of {info['epochs_run']} ({info['stop_reason']})")
+    pusher.push(f"{RUN_NAME}: trained")
 
     # Checks on what the run wrote.
     metrics = pd.read_csv(RUN_DIR / "metrics_epoch.csv")
@@ -1885,3 +2034,25 @@ if MODE == "train":
         **costs,
     )
     log(f"run complete: {len(written)} files, {size_mb:.2f} MB in {RUN_DIR}")
+
+# %% [markdown]
+# ## 3.4 Push to GitHub
+#
+# Pushes the finished run folder (status `complete`) to `run/<policy>_s<seed>`, then checks that
+# the branch on GitHub ends at that commit and holds exactly the files of the run folder. This
+# final push is the one that matters: it is tried three times and the notebook fails loudly if
+# it does not land, so a "successful" run is never silently missing from the branch. (If it
+# fails, the files are still in this notebook's output.) The branch holds the run folder only:
+# no code, no checkpoints (`best.pt` stays in the notebook output) and no CheXpert labels.
+
+# %%
+if MODE == "train":
+    if pusher.work is None:
+        print("push skipped (no GitHub secrets); the run folder stays in the working directory")
+    else:
+        pusher.push(f"{RUN_NAME}: complete", strict=True)
+        tip = pusher.verify()
+        pushed_names = {f.name for f in RUN_DIR.iterdir()}
+        assert not any(name.endswith((".pt", ".pth", ".ckpt")) for name in pushed_names)
+        print(f"pushed {len(pushed_names)} files to branch {pusher.branch} (commit {tip})")
+        pusher.close()
