@@ -11,11 +11,15 @@ need a real run branch: a second claim of the same policy and seed is refused, a
 the token in the run folder is never pushed, a failed progress push does not stop a run, a
 failed final push does, smoke branches are overwritten and ``main`` is never touched.
 
+Part 3 pushes runs in different states (complete, running, failed before any epoch) plus a smoke
+run, and checks that ``tools/status.py`` prints one row per run branch and ignores smoke.
+
 Usage: python tools/pushtest.py [rules]   (``make pushtest`` runs it in the dev shell)
 """
 
 import contextlib
 import io
+import json
 import os
 import runpy
 import shutil
@@ -130,8 +134,8 @@ def part1_end_to_end() -> None:
         check(hits.returncode == 1, f"token absent from commit {commit[:8]}")
 
 
-def part2_rules() -> None:
-    """Load the notebook helpers and check the branch rules."""
+def part2_rules() -> dict:
+    """Load the notebook helpers and check the branch rules; return the notebook namespace."""
     print("part 2: branch rules")
     fresh_remote()
     os.environ.update(ENV, MODE="results")  # the process ends after the test: no need to restore
@@ -198,12 +202,74 @@ def part2_rules() -> None:
     heads = git("for-each-ref", "--format=%(refname:short)", "refs/heads").split()
     check("main" not in heads and sorted(heads) == ["run/demo_s42", "smoke/demo_s42"], "no main")
 
-    pusher_class.claim.__globals__["GITHUB_PAT"] = None
-    os.environ.pop("REMOTE_URL")
+    notebook_globals, url = pusher_class.claim.__globals__, os.environ.pop("REMOTE_URL")
+    notebook_globals["GITHUB_PAT"] = None
     off = make("erin")
     off.claim()
     check(off.work is None and not off.push("x"), "without secrets (off Kaggle) pushing is skipped")
     check(any("push skipped" in line for line in logs), "and the log says so")
+    notebook_globals["GITHUB_PAT"], os.environ["REMOTE_URL"] = TOKEN, url
+    shutil.rmtree(work)
+    return ns
+
+
+# run name: (who, status, [(epoch, val_auroc, images_per_sec), ...])
+FIXTURE_RUNS = {
+    "u_zeros_s42": (
+        "alice",
+        "complete",
+        [(1, 0.7012, 151.2), (2, 0.7544, 150.1), (3, 0.7781, 149.9)],
+    ),
+    "u_ones_s42": ("bob", "running", [(1, 0.6903, 140.0)]),
+    "u_ignore_s42": ("carol", "failed", []),
+}
+
+
+def part3_status(ns: dict) -> None:
+    """Push fixture runs and check the table ``tools/status.py`` prints for them."""
+    print("part 3: tools/status.py")
+    fresh_remote()
+    work = Path(tempfile.mkdtemp(prefix="pushtest_"))
+    for name, (who, status, epochs) in FIXTURE_RUNS.items():
+        run = work / "runs" / name
+        run.mkdir(parents=True)
+        policy, seed = name.rsplit("_s", 1)
+        info = {"policy": policy, "seed": int(seed), "run_by": who, "status": status}
+        (run / "run_info.json").write_text(json.dumps(info | {"run_limits": {"max_epochs": 10}}))
+        if epochs:
+            rows = [f"{e},{auroc},{speed}" for e, auroc, speed in epochs]
+            header = "epoch,val_auroc,images_per_sec"
+            (run / "metrics_epoch.csv").write_text("\n".join([header, *rows]) + "\n")
+        smoke_flags = (False, True) if name == "u_zeros_s42" else (False,)  # plus one smoke branch
+        for smoke in smoke_flags:
+            ns["RunPusher"](run, work, smoke=smoke, who=who, log=print).claim()
+    heads = git("for-each-ref", "--format=%(refname:short)", "refs/heads").split()
+    check("smoke/u_zeros_s42" in heads, "the remote also holds a smoke branch")
+
+    script = ROOT / "tools" / "status.py"
+    done = subprocess.run(
+        [sys.executable, str(script), "--remote", str(REMOTE)], capture_output=True, text=True
+    )
+    check(done.returncode == 0, f"status.py runs ({done.stderr.strip()})")
+    table = [line.split() for line in done.stdout.strip().splitlines()]
+    check(table[0] == ["run", "who", "epoch", "val_auroc", "img/s", "status"], "header row")
+    check(len(table) == 4, "one row per run branch, smoke left out")
+    expected = [
+        ["u_ignore_s42", "carol", "0/10", "-", "-", "failed"],
+        ["u_ones_s42", "bob", "1/10", "0.6903", "140", "running"],
+        ["u_zeros_s42", "alice", "3/10", "0.7781", "150", "complete"],
+    ]
+    check(table[1:] == expected, "rows show the latest epoch, AUROC and speed, sorted by run")
+    relative = subprocess.run(
+        [sys.executable, str(script), "--remote", str(REMOTE.relative_to(ROOT))],
+        capture_output=True,
+        text=True,
+    )
+    check(relative.returncode == 0 and relative.stdout == done.stdout, "a relative path works too")
+    gone = subprocess.run(
+        [sys.executable, str(script), "--remote", str(MOVED)], capture_output=True, text=True
+    )
+    check(gone.returncode != 0, "an unreadable remote is an error, not an empty table")
     shutil.rmtree(work)
 
 
@@ -212,5 +278,5 @@ if __name__ == "__main__":
     only_rules = sys.argv[1:] == ["rules"]  # `rules` skips the slow smoke run (part 1)
     if not only_rules:
         part1_end_to_end()
-    part2_rules()
+    part3_status(part2_rules())
     print("pushtest ok")
