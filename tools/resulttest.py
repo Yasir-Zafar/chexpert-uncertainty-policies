@@ -9,6 +9,10 @@ split, data, files, test order) and checks that each change is reported. Part 3 
 branch from a copy of the remote and checks that an explicit ``N_SEEDS`` stops with the list of
 what is missing while ``auto`` falls back to the complete layers.
 
+Part 4 checks the analysis cells: the one-seed tables equal the seed-42 slice of the three-seed
+run, a policy compared with itself gives difference 0 and p = 1, the labels joined by path match
+a direct read of ``valid.csv``, every export exists and the findings mention every policy.
+
 Usage: python tools/resulttest.py
 """
 
@@ -25,6 +29,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 REMOTE = ROOT / "fake_data" / "results_remote.git"
@@ -163,6 +168,37 @@ def part3_missing_run() -> None:
         )
 
 
+def part4_analysis(ns3: dict) -> None:
+    """Consistency of the analysis cells between seed counts, and basic invariants."""
+    print("part 4: the analysis cells")
+    ENV["N_SEEDS"] = "1"
+    ns1 = load_notebook()
+    check(ns1["RESULT_SEEDS"] == [42] and ns1["SAME_RANKING"] is None, "N_SEEDS=1 analyses seed 42")
+    same = all(
+        ns1["fmt"](ns1["summary"](ns1["agg"](name), metric))
+        == ns3["fmt"](ns3["summary"](ns3["agg"](name, seeds=[42]), metric))
+        for name in ns1["MAIN_POLICIES"]
+        for metric in ns1["METRICS"]
+    )
+    check(same, "one-seed tables equal the seed-42 slice of the three-seed run")
+    a = ns1["agg"]("u_ones")
+    d = ns1["paired"](a, a, "AUROC")
+    check(d["diff"] == 0 and d["p"] == 1.0, "a policy against itself: difference 0, p = 1")
+
+    raw = pd.read_csv(Path(ENV["DATA_ROOT"]) / "valid.csv")
+    raw["path"] = raw["Path"].str.replace(r"^.*?(?=valid/)", "", regex=True)
+    pathologies = ns3["PATHOLOGIES"]
+    direct = raw.set_index("path").loc[ns3["TEST"]["path"], pathologies].fillna(0).to_numpy()
+    check(np.array_equal(direct, ns3["Y_TEST"]), "test labels joined by path match valid.csv")
+
+    names = set(ns3["EXPORT"]["name"])
+    wanted = {"T1_overall", "T3_auroc_vs_u_zeros", "T5_cost", "E2_roc_overlay", "Q5_failure_cases"}
+    check(wanted <= names and len(names) >= 40, f"{len(names)} exports written, key ones present")
+    text = " ".join(ns3["FINDINGS"])
+    labels = ns3["POLICY_LABELS"]
+    check(all(labels[n] in text for n in ns3["MAIN_POLICIES"]), "the findings mention every policy")
+
+
 if __name__ == "__main__":
     os.chdir(ROOT)
     heads = subprocess.run(
@@ -176,4 +212,5 @@ if __name__ == "__main__":
     part1_selection(namespace)
     part2_tampering(namespace)
     part3_missing_run()
+    part4_analysis(namespace)
     print("resulttest ok")
