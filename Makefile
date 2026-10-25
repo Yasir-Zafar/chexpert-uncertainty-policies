@@ -54,6 +54,7 @@ check: lint hooktest fake
 	$(FAKE_ENV) MODE=results $(PY) notebook_src.py > fake_data/rerun.log
 	! grep -E "^(created|warning)" fake_data/rerun.log
 	sha256sum --check --quiet fake_data/created.sha
+	$(MAKE) nbtest
 	@echo "check ok"
 
 POLICY_NAMES := u_zeros u_ones u_ignore u_multiclass u_ones_lsr u_zeros_mc u_zeros_posw
@@ -71,3 +72,27 @@ smoke: fake
 			|| { tail -25 fake_data/smoke_$$p.log; exit 1; }; \
 	done
 	@ls fake_data/repo/runs_smoke
+
+.PHONY: pushtest
+
+# The GitHub push (C15) against a local bare repository: one smoke run end to end, then the
+# branch rules. Takes about as long as one `make smoke` policy.
+pushtest: fake
+	$(PY) tools/pushtest.py
+
+NB := chexpert_uncertainty.ipynb
+
+.PHONY: nb nbcheck nbtest
+
+# The notebook teammates import into Kaggle is generated from notebook_src.py and committed.
+nb:
+	$(PY) tools/make_nb.py
+
+nbcheck:
+	$(PY) tools/make_nb.py --check
+
+# The committed notebook is current and runs top to bottom headlessly (results mode, fake data).
+nbtest: nbcheck fake
+	rm -rf fake_data/nbrun
+	$(FAKE_ENV) MODE=results $(PY) -m nbconvert --to notebook --execute $(NB) \
+		--ExecutePreprocessor.timeout=-1 --output-dir fake_data/nbrun --output executed.ipynb

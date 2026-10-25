@@ -63,7 +63,7 @@ The assignment's final submission is **one notebook containing all the code from
 | Rubric item (points) | What earns it |
 |---|---|
 | Implementation and code quality (15) | One notebook that runs top to bottom in both modes from a clean session; markdown header per section; small functions with docstrings; one frozen CONFIG cell; inline sanity asserts; library versions printed; no dead code |
-| Experimental execution and completeness (10) | All six policies trained under one frozen protocol; a consistency cell proves identical split, data, code version and settings across runs; per-epoch logs for every run |
+| Experimental execution and completeness (10) | All six policies trained under one frozen protocol; a consistency cell proves identical split, data, code version and settings across runs; per-epoch logs for every run, shown in the submitted notebook itself (section 2, C23) |
 | Results and quantitative evaluation, tables (10) | Tables T1 to T7 with 95% CIs, paired differences against U-Zeros, objective-5 table, calibration, cost table; all exported as LaTeX and CSV |
 | Qualitative evaluation (10) | Example gallery, activation-map comparison across the six policies, behaviour on uncertain-labelled images, confusion matrices, failure cases |
 | Analysis and interpretation (5) | Plots chosen to answer "why" (uncertain-case behaviour, entropy), plus an auto-generated findings cell with the numbers the paper quotes |
@@ -105,14 +105,14 @@ Speed settings (`channels_last`, `cudnn_benchmark`), the FLOP counter, GPU monit
 | `train` | Kaggle GPU, once per policy | data prep, train one policy, save predictions and artifacts, push them to GitHub |
 | `results` | Kaggle CPU (no GPU quota) | data prep and stats, fetch the six runs from GitHub, all tables, figures, qualitative analysis, export |
 
-The file submitted is the executed `results` notebook: all code visible, outputs for E1 to E7 and the qualitative section. The six executed `train` notebooks stay on GitHub as the training logs.
+The file submitted is the executed `results` notebook, and it is the **only** thing graders see: all code visible, outputs for E1 to E7 and the qualitative section. Each run trains in its own notebook, so the submitted file never trains anything itself; it must instead carry the full training record of **all six runs** (and the extra one), rebuilt from the run folders pushed to GitHub (C16 inventory, C23 training record). The executed `train` notebooks stay on GitHub only as a backup.
 
 **Authoring.** Write `notebook_src.py` with `# %%` cell markers (jupytext) and generate the `.ipynb` from it. Plain text is easy to edit cell by cell, run as a script and lint. The generated `.ipynb` is what gets uploaded to Kaggle. The `.py` is the source of truth.
 
 **Local development without the licensed data.** `tools/fake_chexpert.py` builds a tiny CheXpert-shaped dataset (frontal and lateral rows, AP and PA, -1/0/1/blank labels, random grayscale JPEGs). Environment variables `MODE`, `POLICY`, `SEED`, `SMOKE`, `DATA_ROOT` and `REPO_DIR` let the whole notebook run on CPU against it. `REPO_DIR` points the notebook at `fake_data/repo`, so a split or qualitative list built from fake data can never land in the real `splits/` or `qual/` folders. The tool is not part of the submission, and the notebook contains no fake-data code.
 
 **GitHub logging.**
-- Each run pushes `runs/<policy>_s<seed>/` to branch `run/<policy>_s<seed>` from inside the notebook, using a fine-grained token from Kaggle Secrets. Progress (the epoch log) is pushed after every epoch, so a dead session still leaves history.
+- Each run pushes `runs/<policy>_s<seed>/` to branch `run/<policy>_s<seed>` from inside the notebook, using a fine-grained token from Kaggle Secrets. Progress (the epoch log) is pushed after every epoch, so a dead session still leaves history. The branch is an orphan branch holding only the run folder, pushed from a throw-away repository, so code, checkpoints and `main` can never be part of a push. The first push refuses a `run/` branch that already exists (two people picked the same policy and seed); the builder deletes the branch of a failed run before it is rerun. A `SMOKE` pass pushes to `smoke/<policy>_s<seed>` instead (`runs_smoke/...` inside), and that branch is overwritten by the next smoke pass, so a smoke run can never block a real one.
 - Kaggle's built-in "Link to GitHub" (File menu) can also be switched on to keep a copy of each notebook version. It saves the notebook, not output files, and users report it won't recommit under an unchanged file name, so treat it as a convenience and rely on the push cell.
 - Results mode fetches the six branches and reads `runs/` from them.
 - Checkpoints (`best.pt`, about 28 MB) are never pushed. They stay in the Kaggle notebook output.
@@ -129,6 +129,7 @@ uncert-cxr/
   splits/split_seed42.csv
   qual/qual_ids.csv
   tools/fake_chexpert.py  tools/status.py
+  tools/make_nb.py  tools/pushtest.py   (notebook generation; push test against a local bare repo)
   runs/<policy>_s<seed>/        (arrives from the run branches)
   results/tables/  results/figures/
 ```
@@ -244,12 +245,12 @@ Each cell group has a markdown header explaining it. Inline `assert`s replace a 
 - **C15** Push to `run/<policy>_s<seed>`.
 
 **Part 4: results (`MODE == "results"`)**
-- **C16** Fetch the runs for the seeds selected by `N_SEEDS` (six policies per seed); consistency check (same CONFIG, `code_version`, split hash, data fingerprint, test row order; seed is the only thing that may differ between runs of the same policy; same GPU name is a warning; every run `complete`). A seed counts only if all six policies have it complete; incomplete layers are listed and ignored. The extra run `u_zeros_posw`, if present, is loaded separately and held to the same CONFIG and `code_version`. Print the protocol table.
+- **C16** Fetch the runs for the seeds selected by `N_SEEDS` (six policies per seed); consistency check (same CONFIG, `code_version`, split hash, data fingerprint, test row order; seed is the only thing that may differ between runs of the same policy; same GPU name is a warning; every run `complete`). A seed counts only if all six policies have it complete; incomplete layers are listed and ignored. The extra run `u_zeros_posw`, if present, is loaded separately and held to the same CONFIG and `code_version`. Print the protocol table. The first output is a **run inventory** with one row per expected run (six policies per seed plus the extra run): who ran it, GPU, epochs, best epoch, wall-clock time and status, with absent runs shown as `missing`, so the submitted notebook documents that all six runs exist.
 - **C17** E1 to E3 quantitative tables and plots (below).
 - **C18** E4 objective-5 table and plot.
 - **C19** E5 calibration. **C20** E6 uncertainty analysis. **C21** E7 computational cost and the E8 class-weighting comparison (skipped with a message if the extra run is absent).
 - **C22** Qualitative section (below).
-- **C23** Training curves (with several seeds: mean line with a min-max band).
+- **C23** Training record of every run, so the submitted notebook alone shows how all six models were trained, built from the pushed `run_info.json`, `metrics_epoch.csv`, `train.log`, `grad_stats.csv` and `gpu_trace.csv`: for each policy (and `u_zeros_posw`) the full per-epoch table (train loss, validation AUROC with policy-resolved and certain-only labels, learning rate, seconds, images per second, peak memory), the first and last lines of its training log, a stop-reason line (best epoch, early stop or max epochs) and gradient-norm and GPU-utilisation summaries; then training curves of all runs on shared axes (with several seeds: mean line with a min-max band). Nothing is shown only for the run that happens to be selected in cell 1.
 - **C24** Export every table (CSV and LaTeX `booktabs`) and every figure (vector PDF plus 300 dpi PNG, single-column 3.5 in or double-column 7.16 in) to `results/`, and print an index of what was written.
 - **C25** Findings cell: best policy overall and per pathology, largest and smallest gains over U-Zeros, whether each CI excludes zero and whether the paired bootstrap p-value is below 0.05, written out as sentences with numbers. With several seeds it also states whether the policy ranking is the same in every seed.
 
@@ -310,7 +311,7 @@ Swap freely; the runs are independent. The extra experiment promised in Table II
 
 **Rules**
 1. Everyone runs the same tagged notebook version (`v1`), the same dataset mirror and the same accelerator.
-2. Each teammate runs a `SMOKE = True` pass first and checks: files on their branch, no token in any log, `.pt` not in git, row counts as expected.
+2. The builder runs a `SMOKE = True` pass first (teammates only start full runs) and checks: files on the `smoke/<policy>_s<seed>` branch, no token in any log, `.pt` not in git, row counts as expected.
 3. Teammates start full runs only after the builder's baseline has finished two epochs and looks sane (validation mean AUROC rising, no NaN, throughput acceptable). The epoch log appears on `run/u_zeros_s42` while it trains.
 4. Teammates push only to their own `run/...` branches, never to `main`.
 5. If a run fails or looks wrong, do not edit and rerun. Tell the builder; a fix means a new version tag and a rerun of every affected run.
@@ -415,8 +416,8 @@ Only if time and quota allow. Layers are all-or-nothing and go in order (section
 | Group | Tool | What it gives you | Cost to epoch time |
 |---|---|---|---|
 | Dev | `ruff` (lint and format) via `make lint` | Clean, consistent code for the 15-point quality item | none, never runs in training |
-| Dev | `Makefile`: `make fake` (build the fake dataset), `make smoke` (all seven policies on CPU), `make nb` (jupytext conversion), `make check` (lint, smoke, results mode on the fake runs, headless `nbconvert --execute` of the generated notebook) | One command proves the notebook runs top to bottom | none |
-| Dev | `pre-commit` hook: ruff plus a pattern check that blocks `github_pat_`, `ghp_` strings and `kaggle.json` | Keeps tokens out of git on three laptops | none |
+| Dev | `Makefile`: `make fake` (build the fake dataset), `make smoke` (all seven policies on CPU), `make nb` (jupytext conversion through `tools/make_nb.py`, which makes the output identical on every run: fixed kernelspec, nbformat 4.4, no cell ids), `make nbcheck` (fails if the committed `.ipynb` is stale), `make nbtest` (nbcheck plus headless `nbconvert --execute` of the generated notebook), `make pushtest` (the GitHub push against a local bare repo), `make check` (lint, hook test, results mode twice with split and qualitative files byte-identical, `nbtest`) | One command proves the notebook runs top to bottom | none |
+| Dev | `pre-commit` hook: ruff plus a pattern check that blocks `github_pat_`, `ghp_` strings and `kaggle.json` | Keeps tokens out of git on three laptops; a fourth hook, `notebook-current`, fails a commit when the committed `.ipynb` differs from `notebook_src.py` | none |
 | Monitoring | One throttled log line every `log_every` steps: loss, images per second, ETA, learning rate, loss scale. No progress bar (bars flood Kaggle commit logs) | Readable logs, early sign of a slow run | negligible, one print per 50 steps |
 | Monitoring | Gradient norm and AMP loss scale every `grad_stats_every` steps to `grad_stats.csv` | Explains NaNs, overflow and unstable runs | negligible, once per 200 steps |
 | Monitoring | Background thread running `nvidia-smi` every 10 s into `gpu_trace.csv` (utilisation, memory, clock, power) | Shows whether epochs are GPU-bound or loader-bound; feeds the cost table | none, separate thread |
