@@ -1101,3 +1101,6 @@
 09:18:10 epoch 10 step 5372/5372 loss 0.7087 114 img/s eta 0.0 min lr 1.0e-06 scale 32768
 09:21:19 epoch 10 done: val AUROC 0.8006 (certain-only 0.8159), best epoch 7, 114 img/s
 09:21:21 trained: best epoch 7 of 10 (early_stop)
+09:22:36 predictions written; validation AUROC 0.8047 matches the epoch log
+09:22:48 inference 3.46 ms/image, 11.6 GFLOPs/image
+09:22:48 run complete: 9 files, 2.25 MB in /kaggle/working/repo/runs/u_zeros_posw_s42
