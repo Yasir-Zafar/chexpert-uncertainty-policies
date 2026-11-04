@@ -1,3 +1,121 @@
 16:19:00 run u_ignore_s42 by Arham-codes on cuda (full run)
 16:19:00 171,892 training and 19,118 validation images
 16:19:00 split 0068fef86ada, data 6ce51e129aec
+16:19:02 pushing to branch run/u_ignore_s42 of https://github.com/Yasir-Zafar/chexpert-uncertainty-policies.git
+16:19:43 cache warm-up: 25,000/191,212 files, 1.3 GB, 620 files/s
+16:20:48 cache warm-up: 50,000/191,212 files, 2.6 GB, 474 files/s
+16:21:45 cache warm-up: 75,000/191,212 files, 3.9 GB, 461 files/s
+16:22:46 cache warm-up: 100,000/191,212 files, 5.2 GB, 448 files/s
+16:23:29 cache warm-up: 125,000/191,212 files, 6.6 GB, 470 files/s
+16:24:29 cache warm-up: 150,000/191,212 files, 7.9 GB, 459 files/s
+16:26:31 cache warm-up: 175,000/191,212 files, 9.3 GB, 390 files/s
+16:27:23 cache warm-up: 191,212/191,212 files, 10.1 GB, 382 files/s
+16:27:45 epoch 1 step 50/5372 loss 0.5215 75 img/s eta 38.0 min lr 1.0e-04 scale 65536
+16:28:00 epoch 1 step 100/5372 loss 0.4815 88 img/s eta 32.0 min lr 1.0e-04 scale 65536
+16:28:15 epoch 1 step 150/5372 loss 0.4581 94 img/s eta 29.8 min lr 1.0e-04 scale 65536
+16:28:30 epoch 1 step 200/5372 loss 0.4451 97 img/s eta 28.5 min lr 1.0e-04 scale 65536
+16:28:45 epoch 1 step 250/5372 loss 0.4340 99 img/s eta 27.6 min lr 1.0e-04 scale 65536
+16:28:59 epoch 1 step 300/5372 loss 0.4281 100 img/s eta 27.0 min lr 1.0e-04 scale 65536
+16:29:14 epoch 1 step 350/5372 loss 0.4234 101 img/s eta 26.4 min lr 1.0e-04 scale 65536
+16:29:29 epoch 1 step 400/5372 loss 0.4200 102 img/s eta 26.0 min lr 1.0e-04 scale 65536
+16:29:44 epoch 1 step 450/5372 loss 0.4162 103 img/s eta 25.6 min lr 1.0e-04 scale 65536
+16:29:59 epoch 1 step 500/5372 loss 0.4148 103 img/s eta 25.2 min lr 1.0e-04 scale 65536
+16:30:14 epoch 1 step 550/5372 loss 0.4121 104 img/s eta 24.8 min lr 1.0e-04 scale 65536
+16:30:33 epoch 1 step 600/5372 loss 0.4097 101 img/s eta 25.1 min lr 1.0e-04 scale 65536
+16:30:50 epoch 1 step 650/5372 loss 0.4071 101 img/s eta 24.9 min lr 1.0e-04 scale 65536
+16:31:04 epoch 1 step 700/5372 loss 0.4057 102 img/s eta 24.5 min lr 1.0e-04 scale 65536
+16:31:19 epoch 1 step 750/5372 loss 0.4044 102 img/s eta 24.2 min lr 1.0e-04 scale 65536
+16:31:34 epoch 1 step 800/5372 loss 0.4027 102 img/s eta 23.9 min lr 1.0e-04 scale 65536
+16:31:49 epoch 1 step 850/5372 loss 0.4017 103 img/s eta 23.5 min lr 1.0e-04 scale 65536
+16:32:04 epoch 1 step 900/5372 loss 0.4006 103 img/s eta 23.2 min lr 1.0e-04 scale 65536
+16:32:19 epoch 1 step 950/5372 loss 0.3994 103 img/s eta 22.9 min lr 1.0e-04 scale 65536
+16:32:33 epoch 1 step 1000/5372 loss 0.3984 103 img/s eta 22.6 min lr 1.0e-04 scale 65536
+16:32:48 epoch 1 step 1050/5372 loss 0.3978 104 img/s eta 22.3 min lr 1.0e-04 scale 65536
+16:33:03 epoch 1 step 1100/5372 loss 0.3969 104 img/s eta 22.0 min lr 1.0e-04 scale 65536
+16:33:18 epoch 1 step 1150/5372 loss 0.3960 104 img/s eta 21.7 min lr 1.0e-04 scale 65536
+16:33:33 epoch 1 step 1200/5372 loss 0.3945 104 img/s eta 21.4 min lr 1.0e-04 scale 65536
+16:33:48 epoch 1 step 1250/5372 loss 0.3939 104 img/s eta 21.1 min lr 1.0e-04 scale 65536
+16:34:02 epoch 1 step 1300/5372 loss 0.3934 104 img/s eta 20.8 min lr 1.0e-04 scale 65536
+16:34:17 epoch 1 step 1350/5372 loss 0.3926 104 img/s eta 20.5 min lr 1.0e-04 scale 65536
+16:34:32 epoch 1 step 1400/5372 loss 0.3912 105 img/s eta 20.3 min lr 1.0e-04 scale 65536
+16:34:47 epoch 1 step 1450/5372 loss 0.3900 105 img/s eta 20.0 min lr 1.0e-04 scale 65536
+16:35:02 epoch 1 step 1500/5372 loss 0.3900 105 img/s eta 19.7 min lr 1.0e-04 scale 65536
+16:35:17 epoch 1 step 1550/5372 loss 0.3899 105 img/s eta 19.4 min lr 1.0e-04 scale 65536
+16:35:31 epoch 1 step 1600/5372 loss 0.3892 105 img/s eta 19.2 min lr 1.0e-04 scale 65536
+16:35:46 epoch 1 step 1650/5372 loss 0.3887 105 img/s eta 18.9 min lr 1.0e-04 scale 65536
+16:36:01 epoch 1 step 1700/5372 loss 0.3883 105 img/s eta 18.6 min lr 1.0e-04 scale 65536
+16:36:16 epoch 1 step 1750/5372 loss 0.3878 105 img/s eta 18.4 min lr 1.0e-04 scale 65536
+16:36:31 epoch 1 step 1800/5372 loss 0.3874 105 img/s eta 18.1 min lr 1.0e-04 scale 65536
+16:36:45 epoch 1 step 1850/5372 loss 0.3870 105 img/s eta 17.8 min lr 1.0e-04 scale 65536
+16:37:00 epoch 1 step 1900/5372 loss 0.3868 105 img/s eta 17.6 min lr 1.0e-04 scale 65536
+16:37:15 epoch 1 step 1950/5372 loss 0.3867 106 img/s eta 17.3 min lr 1.0e-04 scale 65536
+16:37:30 epoch 1 step 2000/5372 loss 0.3861 106 img/s eta 17.0 min lr 1.0e-04 scale 131072
+16:37:45 epoch 1 step 2050/5372 loss 0.3857 106 img/s eta 16.8 min lr 1.0e-04 scale 131072
+16:38:00 epoch 1 step 2100/5372 loss 0.3855 106 img/s eta 16.5 min lr 1.0e-04 scale 131072
+16:38:14 epoch 1 step 2150/5372 loss 0.3851 106 img/s eta 16.3 min lr 1.0e-04 scale 131072
+16:38:29 epoch 1 step 2200/5372 loss 0.3848 106 img/s eta 16.0 min lr 1.0e-04 scale 131072
+16:38:44 epoch 1 step 2250/5372 loss 0.3846 106 img/s eta 15.7 min lr 1.0e-04 scale 131072
+16:38:59 epoch 1 step 2300/5372 loss 0.3844 106 img/s eta 15.5 min lr 1.0e-04 scale 131072
+16:39:14 epoch 1 step 2350/5372 loss 0.3840 106 img/s eta 15.2 min lr 1.0e-04 scale 131072
+16:39:29 epoch 1 step 2400/5372 loss 0.3835 106 img/s eta 15.0 min lr 1.0e-04 scale 131072
+16:39:43 epoch 1 step 2450/5372 loss 0.3832 106 img/s eta 14.7 min lr 1.0e-04 scale 131072
+16:39:58 epoch 1 step 2500/5372 loss 0.3831 106 img/s eta 14.4 min lr 1.0e-04 scale 131072
+16:40:13 epoch 1 step 2550/5372 loss 0.3830 106 img/s eta 14.2 min lr 1.0e-04 scale 131072
+16:40:28 epoch 1 step 2600/5372 loss 0.3828 106 img/s eta 13.9 min lr 1.0e-04 scale 131072
+16:40:46 epoch 1 step 2650/5372 loss 0.3826 106 img/s eta 13.7 min lr 1.0e-04 scale 131072
+16:41:01 epoch 1 step 2700/5372 loss 0.3823 106 img/s eta 13.5 min lr 1.0e-04 scale 131072
+16:41:16 epoch 1 step 2750/5372 loss 0.3822 106 img/s eta 13.2 min lr 1.0e-04 scale 131072
+16:41:31 epoch 1 step 2800/5372 loss 0.3819 106 img/s eta 13.0 min lr 1.0e-04 scale 131072
+16:41:46 epoch 1 step 2850/5372 loss 0.3817 106 img/s eta 12.7 min lr 1.0e-04 scale 131072
+16:42:00 epoch 1 step 2900/5372 loss 0.3813 106 img/s eta 12.5 min lr 1.0e-04 scale 131072
+16:42:15 epoch 1 step 2950/5372 loss 0.3812 106 img/s eta 12.2 min lr 1.0e-04 scale 131072
+16:42:30 epoch 1 step 3000/5372 loss 0.3809 106 img/s eta 11.9 min lr 1.0e-04 scale 131072
+16:42:45 epoch 1 step 3050/5372 loss 0.3806 106 img/s eta 11.7 min lr 1.0e-04 scale 131072
+16:43:00 epoch 1 step 3100/5372 loss 0.3805 106 img/s eta 11.4 min lr 1.0e-04 scale 131072
+16:43:15 epoch 1 step 3150/5372 loss 0.3803 106 img/s eta 11.2 min lr 1.0e-04 scale 131072
+16:43:29 epoch 1 step 3200/5372 loss 0.3804 106 img/s eta 10.9 min lr 1.0e-04 scale 131072
+16:43:44 epoch 1 step 3250/5372 loss 0.3804 106 img/s eta 10.7 min lr 1.0e-04 scale 131072
+16:43:59 epoch 1 step 3300/5372 loss 0.3802 106 img/s eta 10.4 min lr 1.0e-04 scale 131072
+16:44:14 epoch 1 step 3350/5372 loss 0.3799 106 img/s eta 10.2 min lr 1.0e-04 scale 131072
+16:44:29 epoch 1 step 3400/5372 loss 0.3796 106 img/s eta 9.9 min lr 1.0e-04 scale 131072
+16:44:44 epoch 1 step 3450/5372 loss 0.3797 106 img/s eta 9.7 min lr 1.0e-04 scale 131072
+16:44:59 epoch 1 step 3500/5372 loss 0.3796 106 img/s eta 9.4 min lr 1.0e-04 scale 131072
+16:45:13 epoch 1 step 3550/5372 loss 0.3794 106 img/s eta 9.2 min lr 1.0e-04 scale 131072
+16:45:28 epoch 1 step 3600/5372 loss 0.3792 106 img/s eta 8.9 min lr 1.0e-04 scale 131072
+16:45:43 epoch 1 step 3650/5372 loss 0.3791 106 img/s eta 8.6 min lr 1.0e-04 scale 131072
+16:45:58 epoch 1 step 3700/5372 loss 0.3789 106 img/s eta 8.4 min lr 1.0e-04 scale 131072
+16:46:13 epoch 1 step 3750/5372 loss 0.3787 106 img/s eta 8.1 min lr 1.0e-04 scale 131072
+16:46:28 epoch 1 step 3800/5372 loss 0.3785 106 img/s eta 7.9 min lr 1.0e-04 scale 131072
+16:46:42 epoch 1 step 3850/5372 loss 0.3783 106 img/s eta 7.6 min lr 1.0e-04 scale 131072
+16:46:57 epoch 1 step 3900/5372 loss 0.3784 106 img/s eta 7.4 min lr 1.0e-04 scale 131072
+16:47:12 epoch 1 step 3950/5372 loss 0.3782 106 img/s eta 7.1 min lr 1.0e-04 scale 131072
+16:47:27 epoch 1 step 4000/5372 loss 0.3781 106 img/s eta 6.9 min lr 1.0e-04 scale 262144
+16:47:42 epoch 1 step 4050/5372 loss 0.3780 106 img/s eta 6.6 min lr 1.0e-04 scale 262144
+16:47:57 epoch 1 step 4100/5372 loss 0.3778 106 img/s eta 6.4 min lr 1.0e-04 scale 262144
+16:48:12 epoch 1 step 4150/5372 loss 0.3776 106 img/s eta 6.1 min lr 1.0e-04 scale 262144
+16:48:26 epoch 1 step 4200/5372 loss 0.3776 106 img/s eta 5.9 min lr 1.0e-04 scale 262144
+16:48:41 epoch 1 step 4250/5372 loss 0.3775 106 img/s eta 5.6 min lr 1.0e-04 scale 262144
+16:48:56 epoch 1 step 4300/5372 loss 0.3773 106 img/s eta 5.4 min lr 1.0e-04 scale 262144
+16:49:11 epoch 1 step 4350/5372 loss 0.3771 107 img/s eta 5.1 min lr 1.0e-04 scale 262144
+16:49:26 epoch 1 step 4400/5372 loss 0.3769 107 img/s eta 4.9 min lr 1.0e-04 scale 262144
+16:49:40 epoch 1 step 4450/5372 loss 0.3766 107 img/s eta 4.6 min lr 1.0e-04 scale 262144
+16:49:55 epoch 1 step 4500/5372 loss 0.3766 107 img/s eta 4.4 min lr 1.0e-04 scale 262144
+16:50:10 epoch 1 step 4550/5372 loss 0.3765 107 img/s eta 4.1 min lr 1.0e-04 scale 262144
+16:50:25 epoch 1 step 4600/5372 loss 0.3763 107 img/s eta 3.9 min lr 1.0e-04 scale 262144
+16:50:40 epoch 1 step 4650/5372 loss 0.3762 107 img/s eta 3.6 min lr 1.0e-04 scale 262144
+16:50:55 epoch 1 step 4700/5372 loss 0.3760 107 img/s eta 3.4 min lr 1.0e-04 scale 262144
+16:51:09 epoch 1 step 4750/5372 loss 0.3761 107 img/s eta 3.1 min lr 1.0e-04 scale 262144
+16:51:24 epoch 1 step 4800/5372 loss 0.3760 107 img/s eta 2.9 min lr 1.0e-04 scale 262144
+16:51:39 epoch 1 step 4850/5372 loss 0.3759 107 img/s eta 2.6 min lr 1.0e-04 scale 262144
+16:51:54 epoch 1 step 4900/5372 loss 0.3757 107 img/s eta 2.4 min lr 1.0e-04 scale 262144
+16:52:11 epoch 1 step 4950/5372 loss 0.3756 107 img/s eta 2.1 min lr 1.0e-04 scale 262144
+16:52:28 epoch 1 step 5000/5372 loss 0.3755 106 img/s eta 1.9 min lr 1.0e-04 scale 262144
+16:52:45 epoch 1 step 5050/5372 loss 0.3754 106 img/s eta 1.6 min lr 1.0e-04 scale 262144
+16:53:03 epoch 1 step 5100/5372 loss 0.3753 106 img/s eta 1.4 min lr 1.0e-04 scale 262144
+16:53:21 epoch 1 step 5150/5372 loss 0.3752 106 img/s eta 1.1 min lr 1.0e-04 scale 262144
+16:53:40 epoch 1 step 5200/5372 loss 0.3751 106 img/s eta 0.9 min lr 1.0e-04 scale 262144
+16:53:58 epoch 1 step 5250/5372 loss 0.3750 105 img/s eta 0.6 min lr 1.0e-04 scale 262144
+16:54:16 epoch 1 step 5300/5372 loss 0.3750 105 img/s eta 0.4 min lr 1.0e-04 scale 262144
+16:54:34 epoch 1 step 5350/5372 loss 0.3747 105 img/s eta 0.1 min lr 1.0e-04 scale 262144
+16:54:41 epoch 1 step 5372/5372 loss 0.3747 105 img/s eta 0.0 min lr 1.0e-04 scale 262144
+16:58:21 epoch 1 done: val AUROC 0.8084 (certain-only 0.8084), best epoch 1, 105 img/s
