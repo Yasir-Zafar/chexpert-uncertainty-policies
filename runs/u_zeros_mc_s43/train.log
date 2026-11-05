@@ -1106,3 +1106,4 @@ error: failed to push some refs to 'https://github.com/Yasir-Zafar/chexpert-unce
 16:37:33 epoch 10 step 5350/5372 loss 0.3044 119 img/s eta 0.1 min lr 1.0e-06 scale 262144
 16:37:39 epoch 10 step 5372/5372 loss 0.3045 119 img/s eta 0.0 min lr 1.0e-06 scale 262144
 16:38:43 epoch 10 done: val AUROC 0.8026 (certain-only 0.8180), best epoch 7, 119 img/s
+16:38:44 trained: best epoch 7 of 10 (early_stop)
