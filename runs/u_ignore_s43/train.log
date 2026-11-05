@@ -883,3 +883,6 @@
 16:49:37 epoch 8 step 5372/5372 loss 0.3042 106 img/s eta 0.0 min lr 1.0e-05 scale 262144
 16:50:40 epoch 8 done: val AUROC 0.8205 (certain-only 0.8205), best epoch 5, 106 img/s
 16:50:42 trained: best epoch 5 of 8 (early_stop)
+16:51:48 predictions written; validation AUROC 0.8225 matches the epoch log
+16:52:01 inference 3.20 ms/image, 11.6 GFLOPs/image
+16:52:01 run complete: 9 files, 2.17 MB in /kaggle/working/repo/runs/u_ignore_s43
