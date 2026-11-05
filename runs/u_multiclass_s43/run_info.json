@@ -75,8 +75,16 @@
   "torch": "2.11.0+cu130",
   "cuda": "13.0",
   "python": "3.13.16",
-  "status": "running",
+  "status": "trained",
   "started": "2026-11-05 19:10:17",
   "n_train_images": 171892,
-  "n_val_images": 19118
+  "n_val_images": 19118,
+  "trainable_params": 6969231,
+  "best_epoch": 5,
+  "best_certain_epoch": 5,
+  "epochs_run": 8,
+  "stop_reason": "early_stop",
+  "train_seconds": 13128.746725773,
+  "images_per_sec": 104.77168342920277,
+  "peak_mem_gb": 4.52691456
 }

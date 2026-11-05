@@ -882,3 +882,4 @@
 23:32:08 epoch 8 step 5350/5372 loss 0.5206 107 img/s eta 0.1 min lr 1.0e-05 scale 262144
 23:32:17 epoch 8 step 5372/5372 loss 0.5206 106 img/s eta 0.0 min lr 1.0e-05 scale 262144
 23:36:10 epoch 8 done: val AUROC 0.8203 (certain-only 0.8203), best epoch 5, 106 img/s
+23:36:11 trained: best epoch 5 of 8 (early_stop)
