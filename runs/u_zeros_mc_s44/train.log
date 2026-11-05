@@ -883,3 +883,7 @@
 21:14:59 epoch 8 step 5372/5372 loss 0.3135 121 img/s eta 0.0 min lr 1.0e-05 scale 262144
 21:16:00 epoch 8 done: val AUROC 0.8030 (certain-only 0.8182), best epoch 5, 121 img/s
 21:16:02 trained: best epoch 5 of 8 (early_stop)
+21:17:07 predictions written; validation AUROC 0.8046 matches the epoch log
+21:19:13 MC Dropout outputs written (cached vs naive passes differ by 0.0e+00)
+21:19:23 inference 3.14 ms/image, 11.6 GFLOPs/image
+21:19:23 run complete: 13 files, 3.76 MB in /kaggle/working/repo/runs/u_zeros_mc_s44
