@@ -1107,3 +1107,6 @@ error: failed to push some refs to 'https://github.com/Yasir-Zafar/chexpert-unce
 23:51:46 epoch 10 step 5372/5372 loss 0.3813 99 img/s eta 0.0 min lr 1.0e-05 scale 262144
 23:52:57 epoch 10 done: val AUROC 0.7934 (certain-only 0.8063), best epoch 8, 99 img/s
 23:52:59 trained: best epoch 8 of 10 (max_epochs)
+23:54:13 predictions written; validation AUROC 0.7981 matches the epoch log
+23:55:37 inference 3.57 ms/image, 11.6 GFLOPs/image
+23:55:37 run complete: 11 files, 2.81 MB in /kaggle/working/repo/runs/u_ones_s43
