@@ -1,0 +1,706 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[T1]{fontenc}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{amsmath}
+\newcommand{\ci}[2]{\,{\scriptsize[#1, #2]}}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1\textwidth}}
+
+\IEEEoverridecommandlockouts
+
+\begin{document}
+
+\nocite{ref1,ref2,ref3,ref4,ref5,ref6,ref7,ref8,ref9,ref10,ref11,ref12,ref13,ref14,ref15,ref16,ref17}
+
+\title{Evaluating Uncertainty Label Resolution Methods for Multi-Label Chest X-Ray Classification}
+
+\author{
+\IEEEauthorblockN{Arham Basit, Muhammad Hassaan Moazan, and Yasir Zafar}
+\IEEEauthorblockA{23L-3016, 23L-3003, 23L-3029\\
+Software Engineering, FAST NUCES }
+}
+
+\maketitle
+
+\IEEEpeerreviewmaketitle
+
+\section{Introduction}
+
+\subsection{Importance}
+Chest radiography is one of the most widely used diagnostic imaging modalities globally, serving as a critical first line tool for screening and diagnosing life-threatening thoracic conditions \cite{ref1,ref2,ref9,ref10,ref11,ref12}. Automated interpretation of chest X-rays (CXRs) at the level of practicing radiologists could substantially improve clinical workflow prioritization and extend diagnostic capacity in under-resourced settings \cite{ref2,ref3,ref9,ref11,ref12}. Because a single radiograph can exhibit several co-occurring pathologies, automated CXR interpretation is naturally framed as a multi-label classification problem \cite{ref1,ref3,ref9,ref10,ref13}.
+
+\subsection{Background}
+Progress in multi-label CXR classification has been driven by large public datasets such as ChestX-ray8/ChestX-ray14 \cite{ref3,ref12} and CheXpert \cite{ref1,ref10}. More recently, resources such as CheXpert Plus \cite{ref4} have expanded on these by providing paired radiology reports, patient demographics, and DICOM-format images. Because manual annotation at this scale is prohibitively expensive, image labels are instead generated automatically by natural language processing (NLP) tools that parse free-text radiology reports \cite{ref1,ref3,ref12,ref13,ref15}. However, radiology reports frequently contain hedging language \cite{ref1} that reflects genuine diagnostic ambiguity \cite{ref12,ref15} rather than a definite finding. To capture this, the CheXpert labeler assigns each of 14 observations one of four values: positive, negative, uncertain, or not mentioned \cite{ref1}. Depending on the pathology, uncertain labels can constitute a substantial share of the dataset; for example, the uncertain label for Consolidation is nearly twice as prevalent (12.78\%) as the positive label (6.78\%) \cite{ref1}.
+
+\subsection{Problem Statement}
+There is currently no consensus method for resolving these uncertain labels during model training \cite{ref1,ref5,ref6,ref7,ref8,ref10,ref11,ref15}. Irvin et al. \cite{ref1} proposed five candidate heuristics (U-Ignore, U-Zeros, U-Ones, U-MultiClass, and U-SelfTrained) and found that the best-performing policy is pathology dependent rather than universal. Subsequent work has proposed alternative resolutions: replacing discrete labels with continuous probabilities via label smoothing \cite{ref5}, relabeling reports with a vision-supervised language model \cite{ref6}, resolving missing/uncertain labels through semi-supervised pseudo-labeling \cite{ref7}, and, in principle, quantifying uncertainty explicitly via Bayesian inference \cite{ref8,ref11}. Parallel work improves multi-label CXR classification without resolving report-level uncertain labels. Architecture and representation studies include regression into an interpretable two-dimensional label-embedding space \cite{ref9}, graph-refined label embeddings with ViT--DenseNet feature fusion \cite{ref10}, hierarchical attention with a feature-decoupling loss \cite{ref13}, and ConvNeXt features paired with BioBERT-derived label representations \cite{ref16}; \cite{ref9}, \cite{ref13}, and \cite{ref16} do not model uncertain labels, and \cite{ref10} adopts U-Zeros as a default mapping. Image-based confidence estimation studies include fuzzy inference over Monte Carlo dropout entropy \cite{ref11} and subjective-logic uncertainty that is higher for cases whose labels were later corrected by radiologist consensus \cite{ref12}. These derive confidence from the image rather than from the clinician's hedging language, and \cite{ref11} still applies U-Ones to CheXpert's uncertain labels, so they complement rather than resolve the uncertain label. Noisy-label learning \cite{ref14,ref15,ref17} offers related tools but mostly targets incorrect or synthetically corrupted labels rather than these explicit uncertainty categories.
+
+\subsection{Research Gap}
+Three critical gaps exist in the current literature. First, uncertainty resolution strategies (heuristic mapping, label smoothing) and uncertainty quantification strategies (Bayesian methods) are rarely evaluated together on the same model and data split \cite{ref5,ref8,ref11,ref12,ref15}. Second, evaluations are frequently confounded by varying architectures (e.g., DenseNet vs.\ ResNet) \cite{ref9,ref10,ref12,ref13,ref16} and different data subsets and internal validation splits \cite{ref7,ref9,ref10,ref11,ref12,ref13}, as well as by differences in pretraining and noise-handling strategy \cite{ref14,ref15}, making direct cross-paper comparisons unreliable. Third, while heuristic mapping is a common baseline \cite{ref1,ref10,ref11}, it treats uncertainty as an ad-hoc pre-processing choice rather than modeling the true degree of clinical doubt \cite{ref5,ref7,ref8,ref11,ref12}.
+
+\subsection{Evidence}
+The practical consequences of this gap are visible in the range of results reported across studies that cannot be attributed cleanly to any one factor \cite{ref1,ref5,ref6,ref10,ref13,ref16}. Irvin et al. \cite{ref1} reported test AUCs of 0.97 for Pleural Effusion and 0.85 for Atelectasis using heuristic label mapping on the CheXpert test set. Pham et al. \cite{ref5}, using conditional training combined with label smoothing across a six-model ensemble, reported a mean validation AUC of 0.940 and an independent test AUC of 0.930. Jain et al. \cite{ref6} showed that improving label quality directly, without changing the downstream classifier, raised the average F1 score from 0.54 (a naive heuristic baseline) to 0.68 using their VisualCheXbert relabeling approach. Architecture-focused studies show a similar spread on ChestX-ray14: Yang and Wu \cite{ref13} report AUC values above 0.94 for all pathologies under a 70\%/30\% split, whereas Shi et al. \cite{ref10} and Jin et al. \cite{ref16} report mean AUCs of 0.849 (official protocol) and 0.826, respectively. On CheXpert, Shi et al. \cite{ref10} report a mean AUC of 0.815 under an internal 70\%/10\%/20\% split with U-Zeros as the default uncertain-label mapping. Noisy-label studies likewise target incorrect or synthetically corrupted labels \cite{ref14,ref15}, for example jointly addressing label noise and class imbalance \cite{ref17}, rather than the explicit uncertainty categories in CheXpert. Because these gains arise from different splits, architectures, and label policies, it remains unclear how much of the reported improvement is attributable to the uncertainty resolution strategy itself versus other confounds such as ensembling \cite{ref5} or model capacity \cite{ref10,ref14,ref16}.
+
+\subsection{Aims}
+This project aims to conduct a systematic, controlled evaluation of uncertainty label resolution methods for multi-label chest X-ray classification using the CheXpert dataset \cite{ref1}.
+
+\subsection{Objectives}
+\begin{enumerate}
+\item Review and categorize existing approaches to handling uncertain labels in multi-label CXR classification \cite{ref1,ref2,ref3,ref4,ref5,ref6,ref7,ref8,ref9,ref10,ref11,ref12,ref13,ref14,ref15,ref16,ref17}.
+\item Implement a common evaluation protocol (fixed split, convolutional backbone, and metric set) using the CheXpert dataset \cite{ref1}.
+\item Compare heuristic label mapping strategies (U-Ignore, U-Zeros, U-Ones, U-MultiClass) \cite{ref1,ref10,ref11}.
+\item Evaluate label smoothing \cite{ref5} and Bayesian uncertainty-quantification \cite{ref8,ref11} strategies within the same controlled protocol.
+\item Identify which resolution strategy generalizes best across pathologies with differing uncertain label prevalence \cite{ref1}.
+\end{enumerate}
+
+\section{Literature Review}
+
+\begin{table*}[!t]
+\centering
+\caption{Literature Survey of Multi-Label Chest X-Ray Classification \& Label Resolution}
+\label{tab:litsurvey}
+\scriptsize
+\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{P{0.09}P{0.04}P{0.18}P{0.15}P{0.11}P{0.18}P{0.15}}
+\toprule
+\textbf{Reference} & \textbf{Year} & \textbf{Method} & \textbf{Dataset} & \textbf{Evaluation Metrics} & \textbf{Performance Scores} & \textbf{Key Limitations} \\
+\midrule
+Irvin et al. \cite{ref1} & 2019 & DenseNet-121 baseline with five heuristic uncertainty policies (U-Ignore, U-Zeros, U-Ones, U-MultiClass, U-SelfTrained) & CheXpert (224,316 CXRs; 200-study val.\ set; 500-study test set) & AUROC (5 competition tasks), AUPRC & Val.\ AUC: Atelectasis 0.858 (U-Ones), Cardiomegaly 0.854 (U-MultiClass); Test AUC: Pleural Effusion 0.97, Cardiomegaly 0.90, Atelectasis 0.85 & Best performing policy varies by pathology; labels derived from text-mining rules rather than direct image review \\
+\midrule
+Rajpurkar et al. \cite{ref2} & 2017 & 121-layer DenseNet (CheXNet) with weighted binary cross-entropy loss & ChestX-ray14 (112,120 CXRs; 14 pathologies) & AUROC, F1 (vs.\ radiologists) & F1 = 0.435 vs.\ radiologist average 0.387 (pneumonia); exceeded prior state of the art AUROC on all 14 classes & No explicit uncertainty labels; labels are single hard values extracted by an automatic NLP labeler \\
+\midrule
+Wang et al. \cite{ref3} & 2017 & CNN benchmarks (AlexNet, GoogLeNet, VGG-16, ResNet-50) with Class Activation Mapping--style pooling; rule-based NLP mining (DNorm + MetaMap with custom negation/uncertainty rules) & ChestX-ray8 (108,948 CXRs, 8 pathologies), later extended to ChestX-ray14 (112,120 CXRs, 14 pathologies) & NLP labeling F1 (vs.\ OpenI); classification AUROC; localization accuracy/AFP & Labeling F1 = 0.90 (ChestX-ray8 vs.\ OpenI), rising to 0.944 macro-average on the ChestX-ray14 extension; classification AUROC up to 0.8141 (Cardiomegaly, ResNet-50) & Uncertain mentions are collapsed to a binary label rather than retained as a distinct class; considerable label noise \\
+\midrule
+Chambon et al. \cite{ref4} & 2024 & Multimodal dataset curation linking de-identified free-text reports, DICOM metadata, demographics, and CheXbert derived labels & CheXpert Plus (223,228 CXR--report pairs; 64,725 patients) & De-identification recall/error rate; labeler F1 vs.\ image- and text-based human test sets & Only 23 of 853,878 true PHI spans fully missed by the de-identification model (0.002\%), 841 partially missed (0.01\%) & Does not introduce a new training-time uncertainty-handling loss; several pathologies (fracture, lung lesion, pleural other) remain severely underrepresented \\
+\midrule
+Pham et al. \cite{ref5} & 2020 & Conditional training exploiting a disease hierarchy, combined with label-smoothing regularization (LSR); six-architecture ensemble with test-time augmentation & CheXpert (223,414 training studies; 200-study val.; 500-study test) & Mean AUROC across 5 competition tasks & Validation mean AUC = 0.940 (ensemble); independent test mean AUC = 0.930, outperforming 2.6 of 3 benchmarking radiologists & Predefined disease hierarchy is imperfect and hard to extend; gains from LSR are difficult to isolate from the six-model ensemble and TTA \\
+\midrule
+Jain et al. \cite{ref6} & 2021 & VisualCheXbert: biomedically pre-trained BERT fine-tuned to predict image-derived (DenseNet) labels directly from report text & CheXpert \& MIMIC-CXR (BERT trained on MIMIC-CXR reports; evaluated on CheXpert 500-study test set) & Average and weighted-average F1 (vs.\ radiologist image ground truth) & Average F1 rose from 0.54 (Zero-One heuristic baseline) to 0.68 (VisualCheXbert); improvement of 0.14 (95\% CI 0.12--0.17) over the baseline & Trained/evaluated only on the Impression section; addresses label-extraction quality rather than the training-time loss used by the downstream image classifier \\
+\midrule
+Ihler et al. \cite{ref7} & 2024 & Distribution-Aware Multi-Label FixMatch (ML-FixMatch+DA): semi-supervised pseudo-labeling with distribution alignment for missing/uncertain labels & CheXpert5k (5,000 labeled + up to 120,000 unlabeled CXRs; 5 pathologies) & AUC, AUPRC, F1 & AUC improved from 0.7794 (supervised baseline) to 0.8004 (ML-FixMatch+DA), $N = 32$; similar gains (0.7942) when only exploiting the dataset's own missing/uncertain labels & Sensitive to the pseudo-label confidence threshold; evaluated on a 5k-image subset rather than the full CheXpert training set \\
+\midrule
+Yang et al. \cite{ref8} & 2019 & Bayesian neural networks with Monte-Carlo Dropout for predictive uncertainty estimation & CheXpert \& ChestX-ray14 & Predictive entropy and variance. & Higher predictive entropy reported on ambiguous cases, reducing overconfident misdiagnoses & High computational inference cost; no standard multi-label AUROC benchmark scores reported. \\
+\midrule
+Rocha et al. \cite{ref9} & 2024 & Label embedding regression with retrieval based explainability & ChestX ray14 subset (up to 3 co occurring pathologies), 14 labels collapsed into 5 broad categories & Accuracy, precision, recall, F1 & Best rule set gave 8.3 percent F1 gain and 12.9 percent precision gain over multilabel baseline & Reduced 14 to 5 label categories so not directly comparable to standard benchmarks, weak precision on rare classes, depends heavily on autoencoder quality \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[!t]
+\centering
+\addtocounter{table}{-1}
+\caption{Literature Survey of Multi-Label Chest X-Ray Classification \& Label Resolution (continued)}
+\scriptsize
+\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{P{0.09}P{0.04}P{0.18}P{0.15}P{0.11}P{0.18}P{0.15}}
+\toprule
+\textbf{Reference} & \textbf{Year} & \textbf{Method} & \textbf{Dataset} & \textbf{Evaluation Metrics} & \textbf{Performance Scores} & \textbf{Key Limitations} \\
+\midrule
+Shi et al. \cite{ref10} & 2026 & ViT plus DenseNet fusion with graph guided Transformer decoder & ChestX ray14 and CheXpert (14 label, U Zeros policy) & Per label AUC, mean AUC & Mean AUC 0.849 on ChestX ray14, 0.815 on CheXpert, exceeds SynthEnsemble and Med DGTN & High computational cost, cross dataset transfer weak without fine tuning, Grad CAM evaluation only qualitative \\
+\midrule
+Dahan et al. \cite{ref11} & 2026 & Swin Transformer with Bayesian Monte Carlo dropout and adaptive neuro fuzzy inference & ChestX ray14, CheXpert, COVID 19 Radiography, 4 broad classes & Accuracy, AUC, ECE, Brier score, predictive entropy & Accuracy 94.86\%, AUC 0.975, ECE reduced 41\% versus ResNet50 & Only 4 broad classes not full 14 label taxonomy, fuzzy rules not clinically validated \\
+\midrule
+Ghesu et al. \cite{ref12} & 2019 & Subjective logic evidential DenseNet with uncertainty driven sample rejection and bootstrapping & ChestX ray8 and PLCO, multi radiologist relabeled test subsets & ROC AUC at varying rejection rate, F1 under bootstrapping & AUC rose from 0.85 to 0.93 at 50\% rejection, effusion F1 rose from 0.60 to 0.69 & Rejects uncertain cases rather than resolving them, tested on binary tasks not multi label \\
+\midrule
+Yang et al. \cite{ref13} & 2025 & Hierarchical attention CNN with orthogonal feature decoupling loss & ChestX ray14, 112,120 images, 14 labels & Weighted F1, Hamming Loss, per pathology AUC & F1 0.97, Hamming Loss 0.086, AUC above 0.94 for all pathologies, outperforms MA CNN, ML GCN, CS Net, MRChexNet & Single modality only, high model complexity, no external dataset validation, baselines reimplemented not benchmarked on shared protocol \\
+\midrule
+Khanal et al. \cite{ref14} & 2024 & ViT vs ResNet18 robustness to synthetic label noise with self-supervised pretraining & COVID-DU-Ex (33,920 CXRs) and NCT-CRC-HE-100K (100,000 training images) & Balanced accuracy (BEST, LAST), $t$-test & Pretraining improved ViT robustness, MAE+ViT Small significantly better at high noise levels ($p < 0.05$) & Synthetic single-label noise, no CheXpert or genuine uncertainty labels \\
+\midrule
+Wei et al. \cite{ref15} & 2024 & Scoping review of noisy label detection and handling in medical deep learning & 60 studies from 2016 to 2023 across medical prediction tasks & Review based comparison of detection, handling and evaluation methods & 60 studies included. robust loss, weighting and curriculum learning identified as practical approaches & Review rather than experimental study, heterogeneous datasets and methods limit direct numerical comparison \\
+\midrule
+Jin et al. \cite{ref16} & 2023 & ConvNeXt with BioBERT label embeddings and dual weighted metric loss & ChestX ray14 (112,120 CXRs, 14 pathologies) & Per label AUC, mean AUC & Mean AUC = 0.826, outperforming comparison models & No explicit uncertainty handling, evaluated only on ChestX ray14 \\
+\midrule
+Li et al. \cite{ref17} & 2023 & Multi stage noisy label learning with invariant risk minimization and class aware GMM & HAM10000 and CHAOYANG imbalanced noisy medical image datasets & Classification performance against noisy label baselines, ablation studies & Achieved state of the art results on both medical datasets & Multi stage training complexity, hard noisy samples may be misidentified, no CheXpert evaluation \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Critical Discussion}
+The reviewed literature falls into six broad methodological groups regarding how clinical uncertainty, label noise and multi-label supervision are handled.
+
+\subsubsection*{Heuristic label mapping}
+Early datasets used NLP to extract disease mentions but forced them into binary categories, introducing label noise \cite{ref3}. To address this, Irvin et al. \cite{ref1} proposed five heuristic mapping policies on CheXpert. Their experiments showed that no single heuristic dominates across all pathologies: U-Ones outperformed U-Zeros on Atelectasis, while U-MultiClass was superior for Cardiomegaly \cite{ref1}. Rajpurkar et al. \cite{ref2} and Wang et al. \cite{ref3} similarly relied on hard, rule-derived labels without a distinct uncertainty category, which is effective for large-scale training but discards information about genuine diagnostic ambiguity present in the source reports.
+
+\subsubsection*{Supervised learning with label smoothing}
+Recognizing that forcing binary values onto inherently ambiguous findings is unnatural, Pham et al. \cite{ref5} replaced discrete uncertain labels with continuous probability targets via label smoothing regularization, combined with a hierarchy-aware conditional training procedure, achieving a mean test AUC of 0.930. However, because this result depends on a six-model ensemble with test-time augmentation, isolating the specific contribution of label smoothing from the effect of ensembling is difficult \cite{ref5}.
+
+\subsubsection*{Vision-language relabeling}
+Rather than altering the training loss, Jain et al. \cite{ref6} targeted label quality directly: using a vision-supervised BERT model (VisualCheXbert) to relabel report text raised the downstream average F1 score from 0.54 to 0.68. Chambon et al. \cite{ref4} complemented this direction by releasing CheXpert Plus, which pairs de-identified free-text reports, DICOM metadata, and demographic data with the original CheXpert images, improving the quality and richness of the underlying data without prescribing how a vision classifier should handle uncertainty during backpropagation.
+
+\subsubsection*{Semi-supervised and Bayesian uncertainty quantification}
+A more recent line of work treats uncertain and missing labels as an inference problem rather than a fixed pre-processing choice. Ihler et al. \cite{ref7} adapted FixMatch to the multi-label, class-imbalanced setting of CheXpert, using distribution alignment to generate reliable pseudo-labels for uncertain and unmentioned observations, improving AUC from 0.7794 to 0.8004 on a 5k-image subset. Yang et al. \cite{ref8} instead used Monte-Carlo Dropout to produce explicit predictive uncertainty estimates, reporting higher predictive entropy on clinically ambiguous cases. Ghesu et al. \cite{ref12} treat uncertainty as a learned model output using subjective logic, and their rejection experiments raise average ROC AUC from 0.85 to 0.93 once the most uncertain cases are withheld. Dahan et al. \cite{ref11} extend the Monte Carlo dropout idea by feeding dropout entropy into an adaptive fuzzy inference layer, reducing expected calibration error (ECE) by about 41\% under cross-dataset shift. These estimators derive confidence from the image rather than from the clinician's hedging language, so they complement, rather than replace, the CheXpert-style uncertain label handled by Irvin et al. \cite{ref1} and Pham et al. \cite{ref5}, and this line of work has not yet been benchmarked on the same AUROC-based protocol as the others.
+
+\subsubsection*{Multi-label architectural and label-embedding methods}
+Rocha et al. \cite{ref9} recast multi-label classification as regression into a two-dimensional label-embedding space, gaining an inherently interpretable, retrieval-based explanation and an 8.3\% F1 improvement over a multi-label ResNet50 baseline; however, this is evaluated on a reduced ChestX-ray14 subset with at most three co-occurring pathologies and no uncertain category. Shi et al. \cite{ref10} fuse Vision Transformer and DenseNet features through bidirectional cross-attention and initialize a Transformer decoder with graph-refined label embeddings, reaching mean AUC 0.849 on ChestX-ray14 and 0.815 on CheXpert, but apply a single U-Zeros mapping without comparing policies. Yang and Wu \cite{ref13} addressed feature coupling with a hierarchical attention CNN and an orthogonal, KL-divergence-constrained feature decoupling loss that separates correlated findings such as infiltration and effusion, achieving a weighted F1 score of 0.97, Hamming loss of 0.086, and AUC values above 0.94 on ChestX-ray14. Jin et al. \cite{ref16} instead combined ConvNeXt image features with BioBERT-derived label representations and a dual weighted metric loss, achieving a mean AUC of 0.826 on the same dataset. These approaches improve multi-label representation and class-imbalance handling, but \cite{ref9}, \cite{ref13}, and \cite{ref16} do not model uncertain labels and \cite{ref10} applies a single fixed mapping, so their gains reflect architecture and representation design rather than establishing how uncertainty should be resolved during training.
+
+\subsubsection*{Robust learning with noisy labels}
+Khanal et al. \cite{ref14} compared Vision Transformers and CNNs under synthetically corrupted medical image labels, showing that self-supervised pretraining can substantially improve ViT robustness to label noise. More broadly, Wei et al. \cite{ref15} reviewed 60 studies on noisy labels and label uncertainty in medical deep learning, identifying robust loss functions, weighting, and curriculum learning as common handling strategies. Li et al. \cite{ref17} proposed a multi-stage framework using invariant risk minimization and class-aware noise detection to jointly address label noise and class imbalance. However, these methods primarily address incorrect or synthetically corrupted labels rather than the explicit clinical uncertainty categories present in CheXpert, limiting direct comparison with uncertainty-resolution policies.
+
+Taken together, these six groups span a spectrum from simple pre-processing heuristics \cite{ref1,ref2,ref3}, through learned continuous targets \cite{ref5} and improved label sources \cite{ref4,ref6}, to semi-supervised and inference-time uncertainty modelling \cite{ref7,ref8,ref11,ref12}, multi-label architectural and label-embedding methods \cite{ref9,ref10,ref13,ref16}, and robust learning under noisy supervision \cite{ref14,ref15,ref17}. The later studies demonstrate that performance under imperfect supervision can also depend strongly on model architecture, pretraining, class imbalance, and the chosen noise handling strategy. However, no existing study compares representative uncertainty resolution methods under one fixed architecture, data split, and evaluation protocol, which motivates the controlled evaluation proposed here.
+
+\section{Methodology and Experimental Setup}
+
+\subsection{Proposed Methodology}
+
+Our study is a controlled comparison. We keep the data split, the backbone, the preprocessing, the optimizer, and the evaluation the same for every experiment. The only thing we change is how CheXpert's uncertain labels ($-1$) are handled during training. This way, any difference in results can be linked to the label strategy and not to something else, such as the architecture, the split, or ensembling (Section~I-D).
+
+The pipeline has five stages. First, we load the CheXpert labels, keep the five competition pathologies, and build a patient-level train/validation/test split (Section~III-C). Second, we convert each uncertain label into a training target using one of six policies (Table~\ref{tab:policies}). Labels that are ``not mentioned'' are treated as negative ($0$) in every policy, so the policies only differ in how they treat $-1$. Third, we train the same DenseNet-121 under each policy. Fourth, we run inference, using a normal forward pass for the five label policies and repeated stochastic passes with dropout turned on for the Bayesian variant. Finally, we evaluate all policies on the same held-out data using discrimination, calibration, and uncertainty metrics with confidence intervals.
+
+The six policies match Objectives~3 and~4 and are listed in Table~\ref{tab:policies}.
+
+\begin{table}[!t]
+\centering
+\caption{Uncertainty Resolution Policies Compared}
+\label{tab:policies}
+\small
+\begin{tabular}{@{}p{2.1cm}p{3.2cm}p{2.2cm}@{}}
+\toprule
+\textbf{Policy} & \textbf{Uncertain label $u$} & \textbf{Loss} \\
+\midrule
+U-Ignore & Left out of the loss (masked) & Masked BCE \\
+U-Zeros & $u \rightarrow 0$ & BCE \\
+U-Ones & $u \rightarrow 1$ & BCE \\
+U-MultiClass & Kept as a third class & 3-class cross-entropy per pathology \\
+U-Ones + LSR & $u \rightarrow$ soft target from a fixed range, e.g.\ $[0.55, 0.85]$ \cite{ref5} & BCE with soft targets \\
+U-Zeros + MC Dropout & $u \rightarrow 0$; uncertainty estimated at inference \cite{ref8,ref11} & BCE \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We do not include U-SelfTrained in the main comparison. It needs a second training stage, which would add another difference between the methods. We leave it for future work. The MC Dropout variant still needs some label mapping during training, so we use U-Zeros as its reference. Because of this, what it adds is a predictive entropy estimate and a change in calibration, not a new label mapping.
+
+The final goal (Objective~5) is to find which strategy works best across pathologies with different amounts of uncertainty, from 3.6\% for Cardiomegaly to 15.1\% for Atelectasis.
+
+\subsection{Model Architecture}
+
+We use DenseNet-121 pretrained on ImageNet as the backbone. This is the same network used in the CheXpert baseline \cite{ref1} and in CheXNet \cite{ref2}, so our results can be compared directly with that work. It is also small enough (about 8M parameters) that training six models is realistic on our hardware, and it is a well tested convolutional baseline for chest X-rays.
+
+We replace the original 1000-class classifier with a new head. For the five binary-style policies, the head has five independent output units, one per pathology, each with a sigmoid activation. We use independent outputs because several findings can appear in the same image. For U-MultiClass, the head has five separate 3-way softmax outputs (15 logits in total). For the MC Dropout variant, we add a dropout layer ($p = 0.3$) before the classifier and keep it active at inference.
+
+The overall flow is as follows. The input image is converted to a normalized 3-channel tensor and passed through the DenseNet-121 feature extractor. Global average pooling gives a 1024-dimensional vector, which goes through the optional dropout layer and the linear head to produce one probability per pathology. Only the head and the label handling change between experiments.
+
+\subsection{Dataset and Preprocessing}
+
+We use CheXpert \cite{ref1}. Its labels come from a rule-based labeler with four possible values (positive, negative, uncertain, not mentioned), as described in the dataset description. We evaluate the five competition pathologies: Atelectasis, Cardiomegaly, Consolidation, Edema, and Pleural Effusion. These have published benchmarks \cite{ref1,ref5} and different amounts of uncertain labels. We use only frontal images (AP and PA) so that the view type does not become another factor that changes the results.
+
+The official test labels are not public, so we build our own splits. The official training set is divided at the patient level into 90\% for training and 10\% for internal validation. Splitting by patient makes sure no patient appears in both parts, which avoids leakage between studies of the same person. The validation part is used for early stopping, threshold selection, and model selection, and its labels are resolved with the same policy as the training data. For testing, we use the official 200-study validation set, whose labels come from the consensus of three board-certified radiologists. We never use it for tuning. Since these labels have no uncertain class, they give a fair reference that does not depend on any of our policies. The split is generated once with a fixed seed, saved to a file, and reused for all experiments.
+
+Images are resized to $320 \times 320$ following \cite{ref1}, the grayscale channel is copied to three channels, and pixel values are normalized with the ImageNet mean and standard deviation. For augmentation, applied to training images only, we use random rotation of up to $10^{\circ}$, random resized crop with a scale from 0.9 to 1.0, and small brightness and contrast changes. We do not use horizontal flipping, because the position of the heart and the side of a finding matter for diagnosis. Validation and test images are only resized and normalized.
+
+\subsection{Training Configuration}
+
+Table~\ref{tab:training} shows the training setup. All settings are the same for every policy. We do not tune anything per policy, and we do not use ensembling or test-time augmentation, which avoids the problem noted for \cite{ref5}, where the effect of label smoothing is hard to separate from the ensemble. The code, seeds, and split file are kept under version control, and every run records the code version it was trained with, so the experiments can be reproduced.
+
+\begin{table}[!t]
+\centering
+\caption{Training Configuration (Same for All Policies)}
+\label{tab:training}
+\small
+\begin{tabular}{@{}p{2.3cm}p{5.2cm}@{}}
+\toprule
+\textbf{Setting} & \textbf{Value} \\
+\midrule
+Initialization & ImageNet-pretrained DenseNet-121, all layers fine-tuned \\
+Optimizer & AdamW ($\beta_1 = 0.9$, $\beta_2 = 0.999$), weight decay $10^{-5}$ \\
+Learning rate & $10^{-4}$, reduced by a factor of 0.1 (patience 1) when validation mean AUROC stops improving \\
+Batch size & 32 \\
+Max epochs & 10 \\
+Early stopping & Patience of 3 epochs on validation mean AUROC; best checkpoint kept \\
+Loss & BCE with logits (masked for U-Ignore, soft targets for LSR); cross-entropy for U-MultiClass \\
+Class weighting & None by default; positive-class weights tested as an extra experiment \\
+Precision & Mixed precision (FP16) \\
+Runs & Three runs per policy (seeds 42, 43, 44) \\
+MC Dropout & $p = 0.3$, $T = 20$ passes at inference \\
+Regularization & Weight decay, augmentation, early stopping \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation Metrics}
+
+All metrics are computed for each pathology and then averaged, using the radiologist-consensus test labels.
+
+The main metric is the area under the ROC curve (AUROC). It does not depend on a threshold, it is not badly affected by class imbalance, and it is the standard metric in \cite{ref1,ref5}, so our numbers can be compared with published work. We also report the area under the precision-recall curve (AUPRC), which is more informative for pathologies that are rare. For a threshold-based measure we report the F1 score, as in \cite{ref6}. The threshold is chosen on the internal validation set by maximizing Youden's $J$ statistic, and never on the test set.
+
+Label smoothing and MC Dropout can change how well the predicted probabilities match real frequencies, not just how the predictions are ranked \cite{ref11}. Calibration also matters if such a model is ever used clinically. For this reason we report the Expected Calibration Error (ECE) and the Brier score. For the MC Dropout model only, we also compute the predictive entropy and compare it between studies that had uncertain training labels and studies that did not. This tests whether the Bayesian estimate reflects the doubt in the original reports \cite{ref8}.
+
+We give 95\% bootstrap confidence intervals (1{,}000 resamples) on the test set and use paired bootstrap tests to compare each policy with the U-Zeros baseline. These intervals reflect the limited size of the test set. They do not capture the variation between training runs, so each policy is trained with three seeds and we also report the standard deviation over seeds. The test set has only 200 studies, so small differences may not be statistically significant, and we say so in the results. For Objective~5, we tabulate each policy's improvement over U-Zeros next to each pathology's uncertain prevalence. With only five pathologies, this comparison is descriptive and not a formal correlation.
+
+\section{Experiments and Results}
+
+\subsection{Experimental Organization}
+
+This section reports the experiments run with the protocol of Section~III. Each experiment answers one question that comes from the objectives in Section~I, and Table~\ref{tab:experiments} lists them with the tables and figures that hold their results. E1 to E3 cover Objectives~3 and~4, and E4 covers Objective~5. E5 to E8 look at calibration, the uncertainty signal of MC Dropout, computational cost, and class weighting.
+
+\begin{table*}[!t]
+\centering
+\caption{Experiments and the Question Each One Answers}
+\label{tab:experiments}
+\small
+\begin{tabular}{@{}p{0.6cm}p{3.0cm}p{8.4cm}p{4.2cm}@{}}
+\toprule
+\textbf{ID} & \textbf{Experiment} & \textbf{Question} & \textbf{Results} \\
+\midrule
+E1 & Baseline & How well does U-Zeros do under the common protocol? & Tables~\ref{tab:overall}, \ref{tab:perpath} \\
+E2 & Hard-label policies & Do U-Ones, U-Ignore and U-MultiClass beat U-Zeros? & Tables~\ref{tab:overall}--\ref{tab:diff}, Figs.~\ref{fig:roc}, \ref{fig:forest} \\
+E3 & Beyond hard labels & Do label smoothing (U-Ones+LSR) and MC Dropout (U-Zeros+MC) help under the same protocol? & Tables~\ref{tab:overall}--\ref{tab:diff}, \ref{tab:ablation} \\
+E4 & Uncertain prevalence & Which policy gains most on the pathologies where uncertain labels are common? & Table~\ref{tab:prevalence}, Fig.~\ref{fig:prevalence} \\
+E5 & Calibration & Which policy gives the best calibrated probabilities? & Table~\ref{tab:ece}, Fig.~\ref{fig:reliability} \\
+E6 & Uncertainty signal & Is the MC Dropout entropy higher on images whose training label was uncertain? & Table~\ref{tab:entropy}, Fig.~\ref{fig:entropy} \\
+E7 & Computational cost & What does each policy cost to train and to run? & Table~\ref{tab:cost} \\
+E8 & Class weighting & Do positive-class weights help the U-Zeros baseline? & Table~\ref{tab:posw} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+All experiments share the same conditions. Every policy was trained three times, with seeds 42, 43 and 44, which gives 18 runs. The class-weighting model of E8 was trained once with seed 42, so 19 models were trained in total. All of them used the same tagged code version, the same patient-level split (171{,}892 training and 19{,}118 validation images from 58{,}120 and 6{,}414 patients), the same DenseNet-121 with 6.96M trainable parameters, and the settings in Table~\ref{tab:training}. The seed changes the head initialization, the batch order, the augmentation and the dropout masks, but not the split, which was generated once. Training ran on Kaggle on one NVIDIA Tesla T4 per run, with PyTorch 2.11 and mixed precision. The test set is the official CheXpert validation set, with 202 frontal images from 200 patients labelled by radiologist consensus. It was not used for any decision during training or model selection.
+
+Unless a table says otherwise, a reported value is the mean over the three seeds. The values in brackets are a 95\% interval from 1{,}000 patient-level bootstrap resamples of the test set: in each resample the metric is computed for every seed on the same patients and then averaged over seeds. The $\pm$ term is the standard deviation over the three seeds, so the bracket shows the uncertainty due to the small test set and the $\pm$ term shows the variation between training runs. Predictions of different seeds are never averaged, so no number here comes from an ensemble. Paired differences against U-Zeros always compare runs with the same seed. The $p$-values come from the paired bootstrap and are not corrected for multiple comparisons. Table~\ref{tab:diff} has 30 of them, so a single $p$ just below 0.05 should be read with care. The checkpoint of each run is the one with the best policy-resolved validation AUROC, as fixed in the proposal, and F1 uses the Youden threshold found on the validation split of the same run.
+
+\subsection{Training Behaviour}
+
+All 19 runs finished. Each one was stopped by the early stopping rule: the best epoch was between 5 and 8, and training ended three epochs later, after 8 to 10 epochs. No run had its best epoch at the 10-epoch cap, so the cap did not cut any run short. Fig.~\ref{fig:curves} shows the validation AUROC per epoch. Most of the gain comes in the first four epochs, after which the curves flatten. The training loss fell in every epoch of every run, with a sharper drop at the epoch where the learning rate was cut to $10^{-5}$ (loss curves for all runs are in the notebook). The left panel of Fig.~\ref{fig:curves} cannot be compared across policies, because each policy resolves the uncertain validation labels in its own way. On certain labels only (right panel), U-Ones stays about 0.01 below the other policies at every epoch.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/T_training_curves_val_auroc.png}
+\caption{Validation mean AUROC per epoch, averaged over the three seeds (shaded band: one standard deviation). Left: with each policy's own resolution of the uncertain validation labels. Right: on certain validation labels only, which is the same target for every policy.}
+\label{fig:curves}
+\end{figure*}
+
+\subsection{E1--E3: Discrimination}
+
+The purpose of E1 to E3 is to measure how well each policy separates positive from negative test images, first with the hard-label policies and then with label smoothing and MC Dropout. Table~\ref{tab:overall} gives all five metrics averaged over the pathologies, Table~\ref{tab:perpath} breaks AUROC and AUPRC down by pathology, and Table~\ref{tab:diff} gives the paired differences against U-Zeros.
+
+\begin{table*}[!t]
+\centering
+\caption{Test Results Averaged Over the Five Pathologies (E1--E3)}
+\label{tab:overall}
+\footnotesize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{AUROC} $\uparrow$ & \textbf{AUPRC} $\uparrow$ & \textbf{F1} $\uparrow$ & \textbf{ECE} $\downarrow$ & \textbf{Brier} $\downarrow$ \\
+\midrule
+U-Zeros (baseline) & 0.863\ci{0.838}{0.884} $\pm$ 0.002 & 0.708\ci{0.662}{0.759} $\pm$ 0.013 & 0.654\ci{0.612}{0.691} $\pm$ 0.012 & 0.139\ci{0.121}{0.174} $\pm$ 0.004 & 0.158\ci{0.136}{0.181} $\pm$ 0.004 \\
+U-Ones & 0.872\ci{0.846}{0.894} $\pm$ 0.005 & 0.720\ci{0.676}{0.774} $\pm$ 0.010 & \textbf{0.673}\ci{0.628}{0.713} $\pm$ 0.015 & \textbf{0.095}\ci{0.095}{0.132} $\pm$ 0.009 & \textbf{0.135}\ci{0.118}{0.153} $\pm$ 0.001 \\
+U-Ignore & \textbf{0.873}\ci{0.848}{0.894} $\pm$ 0.005 & \textbf{0.726}\ci{0.681}{0.778} $\pm$ 0.009 & 0.654\ci{0.612}{0.688} $\pm$ 0.006 & 0.131\ci{0.116}{0.167} $\pm$ 0.008 & 0.153\ci{0.131}{0.176} $\pm$ 0.004 \\
+U-MultiClass & 0.869\ci{0.846}{0.889} $\pm$ 0.002 & 0.721\ci{0.677}{0.773} $\pm$ 0.008 & 0.661\ci{0.620}{0.696} $\pm$ 0.010 & 0.144\ci{0.125}{0.181} $\pm$ 0.002 & 0.163\ci{0.140}{0.188} $\pm$ 0.002 \\
+U-Ones+LSR & 0.872\ci{0.848}{0.893} $\pm$ 0.012 & 0.717\ci{0.673}{0.773} $\pm$ 0.018 & 0.664\ci{0.620}{0.702} $\pm$ 0.010 & 0.109\ci{0.101}{0.143} $\pm$ 0.007 & 0.140\ci{0.122}{0.159} $\pm$ 0.002 \\
+U-Zeros+MC & 0.861\ci{0.837}{0.883} $\pm$ 0.005 & 0.696\ci{0.651}{0.756} $\pm$ 0.004 & 0.656\ci{0.612}{0.693} $\pm$ 0.017 & 0.137\ci{0.119}{0.173} $\pm$ 0.003 & 0.160\ci{0.138}{0.184} $\pm$ 0.001 \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Mean over seeds 42, 43 and 44; brackets: 95\% patient-level bootstrap interval; $\pm$: standard deviation over seeds. Best value per column in bold. All metrics are unitless and lie in $[0, 1]$; $\uparrow$ means higher is better. ECE uses equal-width bins; because resampling inflates binned ECE, a point estimate can sit at the lower end of its interval.}
+\end{table*}
+
+The U-Zeros baseline reaches a mean AUROC of 0.863 [0.838, 0.884]. Four policies score higher on average: U-Ignore (0.873), U-Ones (0.872), U-Ones+LSR (0.872) and U-MultiClass (0.869). U-Ignore also has the highest AUPRC (0.726), and U-Ones has the highest F1 (0.673). These four policies lie within 0.004 AUROC of each other, which is smaller than the width of any of their intervals. Only one mean difference has an interval that excludes zero: U-Ignore against U-Zeros, $+0.010$ [$+0.001$, $+0.019$], $p = 0.022$ (Table~\ref{tab:diff}). The mean differences of U-Ones ($+0.009$), U-MultiClass ($+0.007$) and U-Ones+LSR ($+0.010$) all have intervals that include zero.
+
+\begin{table*}[!t]
+\centering
+\caption{Test AUROC and AUPRC per Pathology (E1--E3)}
+\label{tab:perpath}
+\footnotesize
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+& \textbf{Policy} & \textbf{Atelectasis} & \textbf{Cardiomegaly} & \textbf{Consolidation} & \textbf{Edema} & \textbf{Pleural Effusion} & \textbf{Mean} \\
+\midrule
+\multirow{6}{*}{\rotatebox{90}{AUROC}}
+& U-Zeros & 0.759 $\pm$ 0.001 & 0.808 $\pm$ 0.010 & 0.889 $\pm$ 0.029 & 0.931 $\pm$ 0.006 & \textbf{0.926} $\pm$ 0.016 & 0.863 $\pm$ 0.002 \\
+& U-Ones & \textbf{0.814} $\pm$ 0.014 & 0.810 $\pm$ 0.006 & 0.863 $\pm$ 0.022 & \textbf{0.947} $\pm$ 0.005 & 0.925 $\pm$ 0.009 & 0.872 $\pm$ 0.005 \\
+& U-Ignore & 0.797 $\pm$ 0.013 & 0.813 $\pm$ 0.020 & 0.896 $\pm$ 0.007 & 0.932 $\pm$ 0.009 & 0.925 $\pm$ 0.001 & \textbf{0.873} $\pm$ 0.005 \\
+& U-MultiClass & 0.760 $\pm$ 0.009 & \textbf{0.830} $\pm$ 0.005 & \textbf{0.913} $\pm$ 0.006 & 0.922 $\pm$ 0.001 & 0.920 $\pm$ 0.003 & 0.869 $\pm$ 0.002 \\
+& U-Ones+LSR & 0.813 $\pm$ 0.029 & 0.809 $\pm$ 0.018 & 0.874 $\pm$ 0.013 & 0.939 $\pm$ 0.002 & \textbf{0.926} $\pm$ 0.009 & 0.872 $\pm$ 0.012 \\
+& U-Zeros+MC & 0.753 $\pm$ 0.007 & 0.807 $\pm$ 0.022 & 0.892 $\pm$ 0.009 & 0.930 $\pm$ 0.005 & 0.923 $\pm$ 0.005 & 0.861 $\pm$ 0.005 \\
+\midrule
+\multirow{6}{*}{\rotatebox{90}{AUPRC}}
+& U-Zeros & 0.628 $\pm$ 0.013 & 0.749 $\pm$ 0.004 & 0.545 $\pm$ 0.099 & 0.747 $\pm$ 0.034 & \textbf{0.873} $\pm$ 0.025 & 0.708 $\pm$ 0.013 \\
+& U-Ones & 0.690 $\pm$ 0.012 & 0.744 $\pm$ 0.007 & 0.483 $\pm$ 0.071 & \textbf{0.823} $\pm$ 0.010 & 0.862 $\pm$ 0.023 & 0.720 $\pm$ 0.010 \\
+& U-Ignore & \textbf{0.691} $\pm$ 0.019 & 0.747 $\pm$ 0.023 & 0.547 $\pm$ 0.012 & 0.777 $\pm$ 0.029 & 0.867 $\pm$ 0.009 & \textbf{0.726} $\pm$ 0.009 \\
+& U-MultiClass & 0.627 $\pm$ 0.016 & \textbf{0.766} $\pm$ 0.002 & \textbf{0.629} $\pm$ 0.026 & 0.731 $\pm$ 0.011 & 0.855 $\pm$ 0.004 & 0.721 $\pm$ 0.008 \\
+& U-Ones+LSR & 0.689 $\pm$ 0.037 & 0.736 $\pm$ 0.018 & 0.507 $\pm$ 0.019 & 0.793 $\pm$ 0.018 & 0.860 $\pm$ 0.021 & 0.717 $\pm$ 0.018 \\
+& U-Zeros+MC & 0.614 $\pm$ 0.010 & 0.741 $\pm$ 0.016 & 0.522 $\pm$ 0.002 & 0.742 $\pm$ 0.013 & 0.862 $\pm$ 0.012 & 0.696 $\pm$ 0.004 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Mean $\pm$ standard deviation over three seeds; best value per pathology in bold. Test positives: Atelectasis 75, Cardiomegaly 66, Consolidation 32, Edema 42, Pleural Effusion 64 of 202 images, so a random classifier has an AUPRC equal to that share (0.16 to 0.37). The 95\% intervals are in the notebook and, for the differences to U-Zeros, in Fig.~\ref{fig:forest}.}
+\end{table*}
+
+The results per pathology are less even than the means. U-Ones and U-Ones+LSR gain the most on Atelectasis, by $+0.055$ and $+0.054$ AUROC, and both intervals are above zero. U-Ones also gains on Edema ($+0.017$, $p = 0.008$), where it has the highest AUROC (0.947) and AUPRC (0.823). U-MultiClass is the best policy on Cardiomegaly (0.830) and Consolidation (0.913). Its gain on Consolidation is $+0.024$ ($p = 0.028$), and its gain on Cardiomegaly, $+0.022$, just misses ($p = 0.054$). The two U-Ones variants lose AUROC on Consolidation ($-0.027$ and $-0.015$), although neither loss is significant. On Pleural Effusion no policy beats U-Zeros; all six lie between 0.920 and 0.926. Figs.~\ref{fig:roc} and~\ref{fig:forest} show the same picture as ROC curves and as intervals on the differences. The pathologies where U-Ones and U-MultiClass do best match those reported by Irvin et al.~\cite{ref1}, who also found U-Ones best for Atelectasis and Edema and U-MultiClass best for Cardiomegaly. Their absolute AUROC values come from a different split and training setup, so we do not compare the numbers directly.
+
+\begin{table*}[!t]
+\centering
+\caption{Paired Test AUROC Difference to U-Zeros (E2, E3)}
+\label{tab:diff}
+\footnotesize
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{Mean} & \textbf{Atelectasis} & \textbf{Cardiomegaly} & \textbf{Consolidation} & \textbf{Edema} & \textbf{Pleural Effusion} \\
+\midrule
+U-Ones & $+0.009$ (0.254) & $\mathbf{+0.055}$ (0.014) & $+0.002$ (0.843) & $-0.027$ (0.240) & $\mathbf{+0.017}$ (0.008) & $-0.001$ (0.829) \\
+U-Ignore & $\mathbf{+0.010}$ (0.022) & $\mathbf{+0.039}$ (0.004) & $+0.004$ (0.707) & $+0.007$ (0.496) & $+0.002$ (0.611) & $-0.001$ (0.943) \\
+U-MultiClass & $+0.007$ (0.138) & $+0.002$ (0.911) & $+0.022$ (0.054) & $\mathbf{+0.024}$ (0.028) & $-0.008$ (0.196) & $-0.006$ (0.280) \\
+U-Ones+LSR & $+0.010$ (0.166) & $\mathbf{+0.054}$ (0.004) & $+0.001$ (1.000) & $-0.015$ (0.432) & $+0.009$ (0.168) & $-0.000$ (0.973) \\
+U-Zeros+MC & $-0.001$ (0.719) & $-0.006$ (0.374) & $-0.001$ (0.921) & $+0.003$ (0.673) & $-0.000$ (0.957) & $-0.003$ (0.527) \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Each cell: policy AUROC minus U-Zeros AUROC with the same seed, averaged over three seeds, with the uncorrected paired bootstrap $p$-value in parentheses. Bold: the 95\% interval excludes zero ($p < 0.05$). The intervals are drawn in Fig.~\ref{fig:forest}.}
+\end{table*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/E2_roc_overlay.png}
+\caption{Test ROC curves per pathology for the six policies (seed 42). The dotted diagonal is a random classifier. The curves of the six policies overlap for Pleural Effusion and Edema and separate most for Atelectasis and Consolidation.}
+\label{fig:roc}
+\end{figure*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/E2_forest_vs_u_zeros.png}
+\caption{Paired test AUROC difference of each policy to U-Zeros, averaged over three seeds, with 95\% patient-level bootstrap intervals. The vertical line marks no difference; an interval that does not cross it excludes zero. Note that the horizontal scale differs between panels.}
+\label{fig:forest}
+\end{figure*}
+
+E3 adds two methods that go beyond hard labels. U-Ones+LSR has the same mean AUROC as U-Ones (0.872), with a slightly lower F1 and the largest standard deviation over seeds of any policy ($\pm$0.012). For MC Dropout, Table~\ref{tab:ablation} separates the effect of training with dropout from the effect of sampling at test time. Training with dropout and then switching it off gives 0.862, and averaging 20 stochastic passes gives 0.861, against 0.863 for U-Zeros. The MC average differs from the single dropout-off pass by $-0.001$ [$-0.002$, $+0.000$] ($p = 0.136$), so the 20 passes change neither AUROC nor calibration. The second half of Table~\ref{tab:ablation} looks at U-MultiClass, whose headline score is $P(\text{positive})$ from the three-way softmax. Renormalizing over the two certain classes, $P(\text{pos}) / (P(\text{pos}) + P(\text{neg}))$, raises its mean AUROC from 0.869 to 0.876 ($+0.007$ [$+0.003$, $+0.011$], $p = 0.002$), which is higher than any value in Table~\ref{tab:overall}. Tables~\ref{tab:overall}--\ref{tab:diff} keep $P(\text{positive})$, because that score was fixed before the runs.
+
+\begin{table}[!t]
+\centering
+\caption{Ablations of MC Dropout and of the U-MultiClass Score (E3)}
+\label{tab:ablation}
+\footnotesize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Setting} & \textbf{AUROC} & \textbf{ECE} & \textbf{Brier} \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{MC Dropout (U-Zeros labels)}} \\
+U-Zeros, no dropout & 0.863 $\pm$ 0.002 & 0.139 $\pm$ 0.004 & 0.158 $\pm$ 0.004 \\
+Dropout in training, off at test & 0.862 $\pm$ 0.005 & 0.138 $\pm$ 0.005 & 0.160 $\pm$ 0.001 \\
+Dropout in training, MC mean of 20 & 0.861 $\pm$ 0.005 & 0.137 $\pm$ 0.003 & 0.160 $\pm$ 0.001 \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{U-MultiClass score}} \\
+$P(\text{pos})$ (used in Tables~\ref{tab:overall}--\ref{tab:diff}) & 0.869 $\pm$ 0.002 & -- & -- \\
+$P(\text{pos}) / (P(\text{pos}) + P(\text{neg}))$ & \textbf{0.876} $\pm$ 0.000 & -- & -- \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Mean test values over the five pathologies, $\pm$ standard deviation over three seeds. The AUPRC of the renormalized U-MultiClass score is 0.739 against 0.721.}
+\end{table}
+
+\subsection{E4: Generalization Across Uncertain Prevalence}
+
+E4 asks whether the gain of a policy depends on how often a pathology was labelled uncertain in training (Objective~5). Table~\ref{tab:prevalence} orders the pathologies from the most to the least uncertain labels, using the share in our frontal training split, and gives each policy's AUROC difference to U-Zeros with its rank. Fig.~\ref{fig:prevalence} plots the same values.
+
+\begin{table*}[!t]
+\centering
+\caption{AUROC Difference to U-Zeros and Rank per Pathology, Ordered by Uncertain Prevalence (E4)}
+\label{tab:prevalence}
+\footnotesize
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{Pathology} & \textbf{Uncertain (\%)} & \textbf{U-Zeros} & \textbf{U-Ones} & \textbf{U-Ignore} & \textbf{U-MultiClass} & \textbf{U-Ones+LSR} & \textbf{U-Zeros+MC} \\
+\midrule
+Atelectasis & 15.6 & 0 (5) & $\mathbf{+0.055}$ (1) & $+0.039$ (3) & $+0.002$ (4) & $+0.054$ (2) & $-0.006$ (6) \\
+Consolidation & 12.8 & 0 (4) & $-0.027$ (6) & $+0.007$ (2) & $\mathbf{+0.024}$ (1) & $-0.015$ (5) & $+0.003$ (3) \\
+Edema & 6.2 & 0 (4) & $\mathbf{+0.017}$ (1) & $+0.002$ (3) & $-0.008$ (6) & $+0.009$ (2) & $-0.000$ (5) \\
+Pleural Effusion & 5.0 & \textbf{0} (1) & $-0.001$ (4) & $-0.001$ (3) & $-0.006$ (6) & $-0.000$ (2) & $-0.003$ (5) \\
+Cardiomegaly & 3.5 & 0 (5) & $+0.002$ (3) & $+0.004$ (2) & $\mathbf{+0.022}$ (1) & $+0.001$ (4) & $-0.001$ (6) \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Uncertain (\%): share of uncertain labels in the frontal training split. Each cell: test AUROC difference to U-Zeros averaged over three seeds, with the rank among the six policies (1 = highest AUROC) in parentheses. Bold: rank 1.}
+\end{table*}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/E4_gain_vs_uncertain_prevalence.png}
+\caption{Test AUROC difference to U-Zeros against the share of uncertain training labels of each pathology. Points are seed means, error bars one standard deviation over seeds. With five pathologies, the plot is descriptive and carries no correlation test.}
+\label{fig:prevalence}
+\end{figure}
+
+The largest gains are on Atelectasis, the pathology with the most uncertain labels (15.6\%). Three policies gain there: U-Ones ($+0.055$), U-Ones+LSR ($+0.054$) and U-Ignore ($+0.039$), while U-Zeros ranks fifth. Consolidation, second at 12.8\%, does not follow the same pattern. There U-MultiClass gains ($+0.024$) and the two U-Ones variants rank last. On the three pathologies with 6.2\% uncertain labels or fewer, every difference is 0.022 or smaller, and most are close to zero. No policy ranks first on more than two pathologies. U-Ones is first on Atelectasis and Edema, U-MultiClass on Consolidation and Cardiomegaly, and U-Zeros only on Pleural Effusion. U-Zeros+MC ranks fifth or sixth on four of the five pathologies.
+
+\subsection{E5: Calibration}
+
+E5 checks how well the predicted probabilities match the observed rate of positives. Table~\ref{tab:overall} gives the mean ECE and Brier score, Table~\ref{tab:ece} gives the ECE per pathology, and Fig.~\ref{fig:reliability} shows the reliability diagrams.
+
+\begin{table}[!t]
+\centering
+\caption{Test ECE per Pathology (E5)}
+\label{tab:ece}
+\footnotesize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{Atel.} & \textbf{Card.} & \textbf{Cons.} & \textbf{Edema} & \textbf{P.\ Eff.} & \textbf{Mean} \\
+\midrule
+U-Zeros & 0.214 & 0.240 & 0.110 & 0.057 & 0.074 & 0.139 \\
+U-Ones & \textbf{0.092} & \textbf{0.215} & \textbf{0.054} & 0.071 & \textbf{0.043} & \textbf{0.095} \\
+U-Ignore & 0.201 & 0.240 & 0.099 & 0.061 & 0.057 & 0.131 \\
+U-MultiClass & 0.234 & 0.245 & 0.109 & 0.065 & 0.068 & 0.144 \\
+U-Ones+LSR & 0.128 & 0.222 & 0.083 & 0.065 & 0.046 & 0.109 \\
+U-Zeros+MC & 0.215 & 0.246 & 0.107 & \textbf{0.056} & 0.059 & 0.137 \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Mean over three seeds; lower is better; lowest per column in bold. Intervals and seed standard deviations are in the notebook.}
+\end{table}
+
+U-Ones gives the best calibrated probabilities, with a mean ECE of 0.095 and a Brier score of 0.135, against 0.139 and 0.158 for U-Zeros. U-Ones+LSR comes second (0.109 and 0.140). U-MultiClass is the worst calibrated (0.144 and 0.163). Per pathology, U-Ones has the lowest ECE on four of the five; the exception is Edema, where U-Zeros+MC (0.056) and U-Zeros (0.057) are lower. Cardiomegaly is poorly calibrated under every policy, with ECE between 0.215 and 0.246. In the reliability diagrams (Fig.~\ref{fig:reliability}), the curves of U-Zeros, U-Ignore, U-MultiClass and U-Zeros+MC lie well above the diagonal for predicted probabilities between about 0.1 and 0.5, which means these models give probabilities below the observed rate of positives. The curves of U-Ones and U-Ones+LSR stay closer to the diagonal.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/E5_reliability.png}
+\caption{Reliability diagrams on the test set, with the five pathologies pooled (seed 42). Marker size grows with the number of predictions in a bin; the dotted line is perfect calibration. The ECE in each title is for the pooled predictions, so it differs from the per-pathology means of Table~\ref{tab:overall}.}
+\label{fig:reliability}
+\end{figure}
+
+\subsection{E6: MC Dropout Entropy and Uncertain Labels}
+
+E6 tests whether the predictive entropy of U-Zeros+MC is higher on images whose training label was uncertain. The test set has no uncertain labels, so E6 uses the 19{,}118 internal validation images, which keep the original CheXpert labels. Table~\ref{tab:entropy} gives the mean entropy per label group for seed 42, the gap between uncertain and certain images, and the AUROC of entropy as a score that separates uncertain from certain images. Fig.~\ref{fig:entropy} shows the distributions.
+
+\begin{table*}[!t]
+\centering
+\caption{MC Dropout Predictive Entropy on Validation Images, by Original Label (E6, Seed 42)}
+\label{tab:entropy}
+\footnotesize
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{Pathology} & \textbf{$n$ (neg / pos / unc)} & \textbf{Negative} & \textbf{Positive} & \textbf{Uncertain} & \textbf{Gap (unc $-$ certain)} & \textbf{Entropy AUROC} & \textbf{Gap, seeds 42 / 43 / 44} \\
+\midrule
+Atelectasis & 13151 / 2964 / 3003 & 0.338 & 0.479 & 0.428 & 0.064\ci{0.057}{0.072} & 0.600\ci{0.589}{0.613} & 0.064 / 0.063 / 0.069 \\
+Cardiomegaly & 16197 / 2283 / 638 & 0.188 & 0.479 & 0.384 & 0.160\ci{0.141}{0.177} & 0.718\ci{0.697}{0.737} & 0.160 / 0.155 / 0.157 \\
+Consolidation & 15421 / 1301 / 2396 & 0.186 & 0.335 & 0.238 & 0.041\ci{0.034}{0.048} & 0.606\ci{0.594}{0.619} & 0.041 / 0.042 / 0.032 \\
+Edema & 13110 / 4857 / 1151 & 0.285 & 0.549 & 0.510 & 0.154\ci{0.141}{0.166} & 0.679\ci{0.664}{0.694} & 0.154 / 0.149 / 0.141 \\
+Pleural Effusion & 10296 / 7886 / 936 & 0.303 & 0.460 & 0.467 & 0.096\ci{0.081}{0.110} & 0.620\ci{0.601}{0.638} & 0.096 / 0.099 / 0.091 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Entropy of the mean of 20 MC Dropout passes, in nats (the maximum for a binary output is $\ln 2 \approx 0.693$). Negative includes ``not mentioned''. Gap: mean entropy of uncertain images minus that of all certain images, with a 95\% bootstrap interval. Entropy AUROC: how well entropy alone ranks uncertain above certain images (0.5 = chance). The negative, positive and uncertain intervals are narrow (about $\pm$0.01) and are in the notebook.}
+\end{table*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/E6_entropy_by_label_group.png}
+\caption{Distribution of MC Dropout predictive entropy on validation images, grouped by the original CheXpert label (neg: negative or not mentioned, pos: positive, unc: uncertain), seed 42. Boxes span the quartiles, the line is the median, and the whiskers cover the full range.}
+\label{fig:entropy}
+\end{figure*}
+
+The gap is positive for all five pathologies, from 0.041 nats for Consolidation to 0.160 for Cardiomegaly. All five intervals are above zero, and the gap has the same sign and a similar size in all three seeds. Entropy alone separates uncertain from certain images only weakly, with AUROC between 0.600 and 0.718. The mean entropy of uncertain images lies between that of negative and positive images for four pathologies. For Pleural Effusion, uncertain and positive images have about the same entropy (0.467 and 0.460).
+
+\subsection{E7: Computational Cost}
+
+E7 records what each policy costs, so that differences in accuracy can be weighed against cost. Table~\ref{tab:cost} gives the cost per policy, measured during the runs.
+
+\begin{table*}[!t]
+\centering
+\caption{Computational Cost per Policy on One NVIDIA Tesla T4 (E7)}
+\label{tab:cost}
+\footnotesize
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{Params (M)} & \textbf{Train time (h)} & \textbf{Time / epoch (min)} & \textbf{Train (img/s)} & \textbf{Inference (ms/img)} & \textbf{Peak memory (GB)} & \textbf{GPU util.\ (\%)} \\
+\midrule
+U-Zeros & 6.96 & 3.82 $\pm$ 0.58 & 24.5 $\pm$ 1.1 & 117 $\pm$ 5 & 3.15 $\pm$ 0.08 & 4.53 & 90 $\pm$ 7 \\
+U-Ones & 6.96 & 4.42 $\pm$ 0.32 & 28.4 $\pm$ 0.3 & 101 $\pm$ 1 & 3.44 $\pm$ 0.21 & 4.53 & 95 $\pm$ 7 \\
+U-Ignore & 6.96 & 4.15 $\pm$ 0.48 & 27.7 $\pm$ 1.0 & 104 $\pm$ 4 & 3.30 $\pm$ 0.30 & 4.53 & 93 $\pm$ 6 \\
+U-MultiClass & 6.97 & 4.12 $\pm$ 0.42 & 27.5 $\pm$ 1.0 & 104 $\pm$ 4 & 3.18 $\pm$ 0.20 & 4.53 & 86 $\pm$ 2 \\
+U-Ones+LSR & 6.96 & 4.48 $\pm$ 0.52 & 28.7 $\pm$ 1.5 & 100 $\pm$ 5 & 3.38 $\pm$ 0.38 & 4.53 & 91 $\pm$ 6 \\
+U-Zeros+MC & 6.96 & 4.04 $\pm$ 0.91 & 25.8 $\pm$ 3.5 & 112 $\pm$ 14 & 3.25 $\pm$ 0.12 & 4.53 & 88 $\pm$ 18 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\textwidth}{\footnotesize Mean $\pm$ standard deviation over three seeds. Params: trainable parameters in millions. Train time: total training time of a run (8 to 10 epochs). Inference: one forward pass, batch inference on the test set. Every policy uses 11.56 GFLOPs per $320 \times 320$ image and the same peak GPU memory. For U-Zeros+MC, inference is a single pass; MC sampling costs are given in the text.}
+\end{table*}
+
+The label policies differ only in how targets are built and in the loss, so their model cost is the same: 6.96M trainable parameters (6.97M for the 15-logit head of U-MultiClass), 11.56 GFLOPs per image, and 4.53 GB of peak GPU memory at batch size 32. The measured training time ranges from 3.82 to 4.48 hours per run, and throughput from 100 to 117 images per second. The spread between seeds of one policy (standard deviation up to 0.91 hours) is about as large as the spread between policies. Training all 19 models took 79.3 GPU hours. A single forward pass takes 3.2 to 3.4 ms per image. MC Dropout with 20 full forward passes takes 64.9 ms per image. Because the dropout layer sits after the backbone, the 1024-dimensional features can be computed once and only the dropout layer and the head repeated 20 times. This brings MC inference down to 3.41 ms per image, 0.17 ms more than a single pass and 19 times faster than 20 full passes.
+
+Set against Table~\ref{tab:overall}, the gains of U-Ignore and U-Ones over U-Zeros come at no extra cost in training or inference. U-Zeros+MC adds inference work (small when the backbone features are cached) and gives no AUROC gain; its added output is the entropy estimate of E6.
+
+\subsection{E8: Positive-Class Weighting}
+
+E8 tests the extra experiment of Table~\ref{tab:training}: U-Zeros trained with positive-class weights in the BCE loss. Each weight is the ratio of negative to positive labels of a pathology in the training split (5.42, 7.15, 13.72, 2.84 and 1.49 for Atelectasis, Cardiomegaly, Consolidation, Edema and Pleural Effusion). It was run with seed 42 only and is reported apart from the six-policy comparison. Table~\ref{tab:posw} compares it with the U-Zeros run of the same seed.
+
+\begin{table}[!t]
+\centering
+\caption{Positive-Class Weights on the U-Zeros Baseline (E8, Seed 42)}
+\label{tab:posw}
+\footnotesize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Model} & \textbf{AUROC} & \textbf{AUPRC} & \textbf{F1} & \textbf{ECE} & \textbf{Brier} \\
+\midrule
+U-Zeros & 0.860 & 0.703 & 0.646 & 0.143 & 0.161 \\
+U-Zeros+PosW & \textbf{0.864} & \textbf{0.704} & \textbf{0.662} & \textbf{0.092} & \textbf{0.131} \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Test metrics averaged over the five pathologies, one seed. AUROC difference $+0.003$ [$-0.009$, $+0.016$], $p = 0.589$. U-Zeros here is the seed-42 run, so its values differ slightly from the three-seed means of Table~\ref{tab:overall}.}
+\end{table}
+
+The weights change the mean AUROC by $+0.003$ [$-0.009$, $+0.016$] ($p = 0.589$), so they bring no clear gain in discrimination. F1 rises from 0.646 to 0.662, and calibration improves: ECE falls from 0.143 to 0.092 and the Brier score from 0.161 to 0.131.
+
+\subsection{Seed Variability and Checkpoint Selection}
+
+Because every policy was trained three times, we can check how stable the ranking of the policies is. Table~\ref{tab:seeds} gives the mean test AUROC of each seed, and Table~\ref{tab:selection} repeats the comparison with a different checkpoint rule.
+
+\begin{table}[!t]
+\centering
+\caption{Mean Test AUROC of Each Seed}
+\label{tab:seeds}
+\footnotesize
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{42} & \textbf{43} & \textbf{44} & \textbf{Mean} & \textbf{SD} \\
+\midrule
+U-Zeros & 0.860 & 0.865 & 0.863 & 0.863 & 0.002 \\
+U-Ones & 0.867 & 0.872 & 0.877 & 0.872 & 0.005 \\
+U-Ignore & 0.871 & \textbf{0.878} & 0.869 & \textbf{0.873} & 0.005 \\
+U-MultiClass & 0.872 & 0.867 & 0.868 & 0.869 & 0.002 \\
+U-Ones+LSR & \textbf{0.873} & 0.860 & \textbf{0.883} & 0.872 & 0.012 \\
+U-Zeros+MC & 0.866 & 0.856 & 0.862 & 0.861 & 0.005 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Mean over the five pathologies; SD: standard deviation over the three seeds. Bold: best policy of each seed.}
+\end{table}
+
+The standard deviation over seeds ranges from 0.002 to 0.012. U-Ones+LSR varies the most, from 0.860 with seed 43 to 0.883 with seed 44. The best policy changes with the seed: U-Ones+LSR for seeds 42 and 44, and U-Ignore for seed 43. U-Ones, U-Ignore and U-MultiClass score above U-Zeros with every seed. U-Ones+LSR falls below U-Zeros with seed 43.
+
+\begin{table}[!t]
+\centering
+\caption{Mean Test AUROC Under Two Checkpoint Rules}
+\label{tab:selection}
+\footnotesize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Policy} & \textbf{Policy-resolved} & \textbf{Certain-only} & \textbf{Same epoch} & \textbf{Rank} & \textbf{Rank} \\
+& \textbf{checkpoint} & \textbf{checkpoint} & & \textbf{(policy-res.)} & \textbf{(certain-only)} \\
+\midrule
+U-Zeros & 0.863 & 0.863 & 3 of 3 & 5 & 6 \\
+U-Ones & 0.872 & \textbf{0.877} & 1 of 3 & 3 & 1 \\
+U-Ignore & \textbf{0.873} & 0.873 & 3 of 3 & 1 & 3 \\
+U-MultiClass & 0.869 & 0.869 & 3 of 3 & 4 & 4 \\
+U-Ones+LSR & 0.872 & 0.876 & 1 of 3 & 2 & 2 \\
+U-Zeros+MC & 0.862 & 0.864 & 2 of 3 & 6 & 5 \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Policy-resolved: the checkpoint with the best validation AUROC under the policy's own labels (used everywhere else). Certain-only: the best validation AUROC on certain labels, the same target for every policy. Same epoch: runs in which both rules pick the same epoch. Values are rounded to three decimals; ranks use the unrounded values.}
+\end{table}
+
+The checkpoint rule matters for the two U-Ones variants. When the checkpoint is chosen by certain-only validation AUROC, U-Ones rises from 0.872 to 0.877 and U-Ones+LSR from 0.872 to 0.876, and U-Ones moves from third to first place. For U-Zeros, U-Ignore and U-MultiClass both rules pick the same epoch in all three runs. All other tables use the rule fixed in the proposal.
+
+\subsection{Qualitative Results}
+
+The qualitative analysis looks at individual images to show where the policies agree, where they differ, and where all of them fail. All examples use the seed-42 models. The notebook has the full set for all five pathologies; here we show Atelectasis, where the policies differ most, plus figures that cover all pathologies.
+
+Fig.~\ref{fig:gallery} shows Atelectasis test images that the U-Zeros baseline classifies correctly and incorrectly, with the probability that each policy gives them. U-Ones gives a higher probability than U-Zeros on almost every image. On the two false negatives of the baseline, U-Ones gives 0.46 and 0.40 where U-Zeros gives 0.11 and 0.10. U-Ones also gives higher scores to the two false positives (0.22 and 0.19), so it shifts the scores up for both classes.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/Q1_gallery_Atelectasis.png}
+\caption{Atelectasis test images that the U-Zeros baseline gets right (TP, TN) and wrong (FP, FN) at its validation threshold. Above each image: the predicted probability of each policy (Z: U-Zeros, O: U-Ones, I: U-Ignore, M: U-MultiClass, L: U-Ones+LSR, C: U-Zeros+MC), seed 42.}
+\label{fig:gallery}
+\end{figure}
+
+Fig.~\ref{fig:cam} shows class activation maps for the same pathology, for one image of each kind: true positive, false negative, false positive, and a validation image with an uncertain label. On the true positive, the six maps look much alike and all weight the lower lung zones. The maps differ more on the false negative and on the uncertain image, where U-Ones and U-Ones+LSR put more weight on the lower right zone than the other policies.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/Q2_cam_Atelectasis.png}
+\caption{Class activation maps for Atelectasis from each policy (seed 42) on the same four images: a true positive, a false negative and a false positive from the test set, and a validation image whose CheXpert label is uncertain. Brighter regions contribute more to the Atelectasis score.}
+\label{fig:cam}
+\end{figure*}
+
+Fig.~\ref{fig:uncprob} and Table~\ref{tab:uncprob} show what each policy predicts on validation images whose training label was uncertain. U-Ones and U-Ones+LSR give the highest mean probability for every pathology; for Atelectasis, for example, the means are 0.390 and 0.331 against 0.188 for U-Zeros. U-Ignore sits between the two groups. U-MultiClass gives about the same $P(\text{positive})$ as U-Zeros, because its third class takes part of the probability.
+
+\begin{table}[!t]
+\centering
+\caption{Mean Predicted Probability on Validation Labels Marked Uncertain (Seed 42)}
+\label{tab:uncprob}
+\footnotesize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lrcccccc@{}}
+\toprule
+\textbf{Pathology} & \textbf{$n$} & \textbf{Z} & \textbf{O} & \textbf{I} & \textbf{M} & \textbf{L} & \textbf{C} \\
+\midrule
+Atelectasis & 3003 & 0.188 & 0.390 & 0.240 & 0.179 & 0.331 & 0.185 \\
+Cardiomegaly & 638 & 0.215 & 0.310 & 0.243 & 0.214 & 0.311 & 0.222 \\
+Consolidation & 2396 & 0.075 & 0.248 & 0.093 & 0.079 & 0.214 & 0.076 \\
+Edema & 1151 & 0.391 & 0.551 & 0.449 & 0.363 & 0.525 & 0.378 \\
+Pleural Effusion & 936 & 0.440 & 0.509 & 0.477 & 0.440 & 0.519 & 0.435 \\
+\bottomrule
+\end{tabular}%
+}
+\par\smallskip
+\parbox{\columnwidth}{\footnotesize Z: U-Zeros, O: U-Ones, I: U-Ignore, M: U-MultiClass ($P(\text{positive})$), L: U-Ones+LSR, C: U-Zeros+MC.}
+\end{table}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{figures/Q3_probability_on_uncertain_labels.png}
+\caption{Distribution of the predicted probability on validation images whose CheXpert label is uncertain, per pathology and policy (seed 42; letters as in Fig.~\ref{fig:gallery}). Boxes span the quartiles and the line is the median.}
+\label{fig:uncprob}
+\end{figure*}
+
+Fig.~\ref{fig:confusion} gives the confusion matrices on the test set at each run's validation threshold. The errors follow the pathology more than the policy. For Cardiomegaly, every policy misses 31 to 35 of the 66 positive images, while it raises only 6 to 10 false alarms. Consolidation shows the opposite pattern: 27 to 30 of the 32 positives are found, but at the cost of 34 to 53 false positives. Among the policies, U-Ones+LSR finds the most Atelectasis positives (62 of 75) and also has the most false positives there (45 of 127).
+
+\begin{figure*}[!tp]
+\centering
+\includegraphics[width=0.6\textwidth]{figures/Q4_confusion_matrices.png}
+\caption{Test confusion matrices per pathology (rows) and policy (columns), seed 42. Within each matrix, rows are the radiologist label and columns the prediction at the run's validation Youden threshold. Cells give image counts out of 202.}
+\label{fig:confusion}
+\end{figure*}
+
+Fig.~\ref{fig:failures} shows the five most confident wrong predictions of U-Zeros and of U-Ignore. All ten are Cardiomegaly cases that the radiologists marked positive and that the models scored at 0.006 or below. Two of the images appear in both lists. Several of them carry portable-film markers and show lines or leads over the chest. These cases match the high false-negative count for Cardiomegaly in Fig.~\ref{fig:confusion}.
+
+\begin{figure*}[!tp]
+\centering
+\includegraphics[width=\textwidth]{figures/Q5_failure_cases.png}
+\caption{The five most confident wrong test predictions of U-Zeros (top) and U-Ignore (bottom), seed 42. Each image is labelled positive for Cardiomegaly by the radiologists, and the score above it is the predicted probability.}
+\label{fig:failures}
+\end{figure*}
+
+\subsection{Analysis of the Results}
+
+This subsection links the main results to the evidence behind them. A fuller discussion, with limitations and the comparison to earlier work, belongs in the Discussion.
+
+The calibration results follow the gap between the positive rate of the automatic training labels and that of the radiologist test labels. For Atelectasis, 15.6\% of training labels are positive but 37.1\% of test images are. Counting uncertain labels as positive, as U-Ones does, raises the training rate to 31.2\%, and the ECE of U-Ones on Atelectasis is less than half that of U-Zeros (0.092 against 0.214). For Cardiomegaly the gap remains even with the uncertain labels added (15.8\% against 32.7\%), and every policy stays poorly calibrated there. For Edema the training rate is already above the test rate (26.1\% against 20.8\%), and U-Ones is slightly worse than U-Zeros. Consolidation fits the same pattern; Pleural Effusion does not, since U-Ones improves its ECE although its training rate moves further from the test rate. The under-prediction in Fig.~\ref{fig:reliability} and the better calibration of the weighted model in E8 point the same way: methods that raise the predicted probabilities move them closer to the test prevalence.
+
+The validation curves show why the choice of validation target matters. On certain validation labels U-Ones is the lowest policy at every epoch (Fig.~\ref{fig:curves}), yet it is among the best on the radiologist test labels. Both the validation and the training labels come from the same report labeler, while the test labels do not. A policy can therefore look worse on the internal validation set and still agree better with the radiologists, which also explains why the checkpoint rule changes the U-Ones results in Table~\ref{tab:selection}.
+
+The errors in the qualitative figures depend on the pathology more than on the policy. Cardiomegaly is missed by every policy in about half of the positive test images (Fig.~\ref{fig:confusion}), and the most confident errors of two different policies are the same kind of case (Fig.~\ref{fig:failures}). In our training split, about 80\% of Cardiomegaly labels are ``not mentioned'' and are set to negative by every policy, so the uncertain-label policy cannot change that part of the supervision. This is consistent with the small differences between policies on Cardiomegaly in Table~\ref{tab:diff}.
+
+The MC Dropout entropy responds to uncertain labels, but it is not a clean marker of them. Entropy is highest when a prediction is near 0.5, and positive images, whose probabilities are pushed down by the U-Zeros training, often sit in that range. That is why positive images have the highest entropy in Table~\ref{tab:entropy}, and why entropy separates uncertain from certain images with an AUROC of at most 0.718.
+
+Finally, the differences between the best four policies (0.004 AUROC) are smaller than the seed standard deviation of U-Ones+LSR (0.012) and smaller than any test interval. On this test set, the evidence supports the statement that U-Ignore, U-Ones, U-MultiClass and U-Ones+LSR do better than U-Zeros on average, mainly through Atelectasis, Consolidation and Edema. It does not support a strict ranking among the four.
+
+\subsection{Results Summary}
+
+The main findings, in terms of the objectives, are the following.
+
+For the hard-label policies (Objective~3), U-Ignore has the highest mean test AUROC, 0.873 [0.848, 0.894] $\pm$ 0.005, and the highest AUPRC, 0.726. It is the only policy whose mean gain over U-Zeros, $+0.010$, has an interval that excludes zero. U-Ones (0.872) and U-MultiClass (0.869) are also above the 0.863 of U-Zeros with every seed, but their intervals include zero. The top four policies are within 0.004 of each other, and their order changes with the seed and with the checkpoint rule.
+
+For the methods beyond hard labels (Objective~4), U-Ones+LSR matches U-Ones in mean AUROC (0.872) but varies the most between seeds. MC Dropout does not change AUROC ($-0.001$). Its entropy is higher on images with uncertain labels for all five pathologies, by 0.041 to 0.160 nats, but it separates them only weakly (AUROC 0.600 to 0.718). U-Ones gives the best calibration, with an ECE of 0.095 and a Brier score of 0.135.
+
+For the pathologies with different uncertain prevalence (Objective~5), no single policy is best everywhere. The largest gains are on Atelectasis, the most uncertain pathology, where U-Ones gains $+0.055$ AUROC. U-MultiClass is best on Consolidation and Cardiomegaly, U-Ones on Atelectasis and Edema, and U-Zeros on Pleural Effusion. All label policies have the same training and inference cost, and MC sampling adds 0.17 ms per image when the backbone features are reused.
+
+\clearpage
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
