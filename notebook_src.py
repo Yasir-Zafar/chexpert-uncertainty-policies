@@ -1,33 +1,16 @@
 # %% [markdown]
 # # Evaluating Uncertainty Label Resolution Methods for Multi-Label Chest X-Ray Classification
 #
-# CheXpert's report labeler marks hedged findings as *uncertain* (-1). This notebook compares
-# six ways of turning that label into a training target under one fixed protocol: one
-# backbone (ImageNet DenseNet-121, fully fine-tuned), one patient-level split, one training
-# recipe and one metric set. Only the uncertainty policy changes between runs.
+# Some CheXpert labels are "uncertain" (-1). We try six ways to deal with them and keep
+# everything else the same, so only the label rule changes.
 #
-# **Research questions**
-# 1. Do U-Ones, U-Ignore or U-MultiClass beat the U-Zeros baseline? (E1, E2)
-# 2. Do label smoothing (U-Ones + LSR) and MC Dropout help under the same protocol? (E3)
-# 3. Which policy gains most where uncertain labels are common? (E4)
-# 4. Which policy is best calibrated, and does MC entropy flag uncertain studies? (E5, E6)
-# 5. What does each policy cost to train and run? (E7)
-#
-# **How to run**
-# - `MODE = "train"` (Kaggle GPU): trains one policy and pushes its outputs to the run branch
-#   `run/<policy>_s<seed>`. Each person sets `POLICY` (and `SEED`) in the next cell and runs
-#   their own policies; runs never share a branch, so they can train at the same time.
-# - `MODE = "results"` (Kaggle CPU): fetches every run branch and builds all tables and figures.
-#
-# The next cell is the only one to edit. Everything after it is the frozen protocol.
+# - `MODE = "train"`: train one policy on Kaggle GPU and push it to its own branch.
+# - `MODE = "results"`: get all runs and make the tables and plots.
 
 # %% [markdown]
 # ## 0.1 Run settings (the only cell to edit)
 #
-# `POLICY` is one of `u_zeros`, `u_ones`, `u_ignore`, `u_multiclass`, `u_ones_lsr`,
-# `u_zeros_mc` (plus the extra experiment `u_zeros_posw`). `SEED` is 42 unless your team has
-# agreed on an extra seed layer (43, 44). `N_SEEDS` is read only in results mode. Leave
-# `REPO_REF` alone: it selects the tagged code version whose split file every run uses.
+# Pick the `POLICY` and `SEED` here. Dont change `REPO_REF`.
 
 # %%
 import os
@@ -42,10 +25,7 @@ REPO_REF = os.environ.get("REPO_REF", "v1")
 # %% [markdown]
 # ## 0.2 Frozen protocol
 #
-# `CONFIG` never changes between runs; results mode asserts it is identical in every run it
-# combines. Head, loss and dropout settings are per policy and live in the policy registry
-# (section 2.2). Environment details such as the dataset mount path are deliberately *not* in
-# `CONFIG`, because they may differ between Kaggle accounts without changing the experiment.
+# Settings that are the same for every run. Dont change them.
 
 # %%
 import base64
@@ -120,9 +100,6 @@ assert MODE in ("train", "results"), f"MODE must be 'train' or 'results', got {M
 assert SEED in CONFIG["seeds"], f"SEED must be one of {CONFIG['seeds']}, got {SEED}"
 assert N_SEEDS in ("1", "2", "3", "auto"), f"N_SEEDS must be 1, 2, 3 or auto, got {N_SEEDS!r}"
 
-# A smoke pass (SMOKE=1) checks that a run works end to end in minutes: a data subset, two
-# epochs and a short monitoring interval. Its results go to runs_smoke/ and are never used.
-# The environment variables only matter for local CPU checks; on Kaggle the defaults apply.
 RUN_LIMITS = {
     "train_images": int(os.environ.get("SMOKE_TRAIN", 2000)) if SMOKE else None,
     "val_images": int(os.environ.get("SMOKE_VAL", 500)) if SMOKE else None,
@@ -163,16 +140,7 @@ else:
 # %% [markdown]
 # ## 0.3 Environment
 #
-# Detects Kaggle, reads the GitHub secrets, finds the dataset and locates the repository.
-#
-# On Kaggle the repository is cloned at `REPO_REF` into the working directory, so every run
-# (by any teammate, at any time) reads the same committed split and qualitative-id files.
-# Git commands that talk to GitHub receive the token as a per-command HTTP header, never in
-# the URL or the git config, and every line of git output is scrubbed of it before printing.
-#
-# `RunPusher` publishes a run folder to its own branch (`run/<policy>_s<seed>`) from a
-# throw-away repository, so the push can only ever contain that folder. It is used by the
-# training run (sections 3.2 and 3.4).
+# Finds the dataset, gets the repo and sets up pushing to GitHub. The token never gets printed.
 
 # %%
 IS_KAGGLE = Path("/kaggle/input").is_dir()
@@ -192,7 +160,7 @@ def get_secret(name: str) -> str | None:
 
 
 GITHUB_PAT = get_secret("GITHUB_PAT")
-GITHUB_REPO = get_secret("GITHUB_REPO")  # "owner/name"
+GITHUB_REPO = get_secret("GITHUB_REPO")
 GITHUB_USER = get_secret("GITHUB_USER")
 RUN_BY = GITHUB_USER or os.environ.get("USER", "unknown")
 _AUTH_HEADER = (
@@ -222,7 +190,7 @@ def run_git(*args: str, cwd: Path | None = None, auth: bool = False) -> str:
     cmd = ["git"]
     if auth and _AUTH_HEADER:
         cmd += ["-c", f"http.extraHeader={_AUTH_HEADER}"]
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}  # fail instead of waiting for a password
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     proc = subprocess.run(cmd + list(args), cwd=cwd, env=env, capture_output=True, text=True)
     out = scrub(proc.stdout + proc.stderr)
     if proc.returncode != 0:
@@ -247,7 +215,7 @@ def clone_repo(ref: str, dest: Path) -> Path:
     return dest
 
 
-PUSH_SUFFIXES = {".json", ".csv", ".log", ".npz"}  # nothing else may leave the notebook
+PUSH_SUFFIXES = {".json", ".csv", ".log", ".npz"}
 PUSH_MAX_MB = 25
 
 
@@ -265,7 +233,7 @@ class RunPusher:
         self, run_dir: Path, repo_dir: Path, smoke: bool, who: str, log: Callable[[str], None]
     ) -> None:
         self.run_dir, self.smoke, self.who, self.log = run_dir, smoke, who, log
-        self.rel = run_dir.relative_to(repo_dir).as_posix()  # path inside the branch
+        self.rel = run_dir.relative_to(repo_dir).as_posix()
         self.branch = f"{'smoke' if smoke else 'run'}/{run_dir.name}"
         self.enabled = bool(os.environ.get("REMOTE_URL") or (GITHUB_PAT and GITHUB_REPO))
         self.work: Path | None = None
@@ -298,8 +266,6 @@ class RunPusher:
             ("user.name", self.who),
             ("user.email", f"{self.who}@users.noreply.github.com"),
             ("commit.gpgsign", "false"),
-            # Behave the same on every machine: a global ignore file (for example `*.log`)
-            # would silently drop run files, and global hooks have no business here.
             ("core.excludesFile", os.devnull),
             ("core.hooksPath", os.devnull),
         ]:
@@ -419,19 +385,10 @@ print(f"repo dir:  {REPO_DIR}")
 #
 # ## 1.1 Load and filter
 #
-# Reads the official `train.csv` (training data) and `valid.csv` (our test set: 200 studies
-# labelled by three board-certified radiologists, no uncertain class). The `Path` prefix that
-# differs between mirrors is stripped, so `path` (e.g. `train/patient00001/study1/
-# view1_frontal.jpg`) is the stable row id everywhere. Rows are filtered to frontal views, then
-# to AP or PA position, with the count printed after each step.
-#
-# Raw label values are kept as read (1, 0, -1, or blank for *not mentioned*). Blanks become 0
-# only when a label matrix is built (`label_matrix`), so the dataset statistics can still count
-# not-mentioned entries separately. The data fingerprint (SHA-256 over both CSVs) is recorded
-# with every run so results mode can prove all runs used the same data.
+# Read `train.csv` and `valid.csv` (valid is our test set) and keep only frontal AP/PA images.
 
 # %%
-EXPECTED_RAW_ROWS = {"train": 223_414, "valid": 234}  # official CheXpert-small CSVs
+EXPECTED_RAW_ROWS = {"train": 223_414, "valid": 234}
 _PREFIX = re.compile(r"^.*?(?=(?:train|valid)/patient\d+/)")
 _PATH_FORMAT = r"^(train|valid)/patient\d+/study\d+/view\d+_\w+\.jpg$"
 
@@ -488,7 +445,6 @@ assert set(np.unique(TEST[PATHOLOGIES])) <= {0.0, 1.0}, "test labels must be 0 o
 assert not set(TRAIN_ALL["patient_id"]) & set(TEST["patient_id"]), "train/test patients overlap"
 assert TRAIN_ALL["path"].is_unique and TEST["path"].is_unique
 
-# A CSV-only copy (no image folders) is enough to build the split and statistics locally.
 csv_only = not IS_KAGGLE and not (DATA_ROOT / "train").is_dir()
 if csv_only:
     print("note: no image folders under the data root; image file check skipped")
@@ -507,15 +463,8 @@ print(f"data fingerprint: {DATA_FINGERPRINT}")
 # %% [markdown]
 # ## 1.2 Patient-level split
 #
-# The official training rows are split by patient into *analysis train* (90%) and *internal
-# validation* (10%), so no patient appears in both. Validation keeps the original -1 labels.
-# Patients are visited in a seeded random order and added to validation until it holds 10% of
-# the images, which keeps the image fraction within one patient of the target.
-#
-# The split is created **once**, by the builder, outside Kaggle, and committed to
-# `splits/split_seed42.csv` before the code version is tagged. Every run then loads that file
-# from the tagged clone, so all teammates train on the identical split even when their runs
-# overlap in time. A Kaggle run never creates a split: if the file is missing it stops.
+# Split train into 90% train and 10% validation by patient, so no patient is in both. The split
+# file is made once and every run reads the same one.
 
 # %%
 SPLIT_PATH = REPO_DIR / "splits" / f"split_seed{CONFIG['split_seed']}.csv"
@@ -575,18 +524,13 @@ print(f"validation share {val_share:.2%}; split sha256 {SPLIT_SHA256}")
 # %% [markdown]
 # ## 1.3 Dataset statistics
 #
-# Label counts per pathology for the full (frontal AP/PA) training data, the analysis train and
-# internal validation splits, and the test set, plus images and patients per split. The
-# uncertain share in the analysis split is the prevalence used by experiment E4.
-#
-# Tables are written as CSV and LaTeX (`booktabs`), figures as vector PDF plus 300 dpi PNG at
-# IEEE single-column (3.5 in) or double-column (7.16 in) width.
+# How many positive, negative and uncertain labels each split has.
 
 # %%
 COLUMN_WIDTH_IN, PAGE_WIDTH_IN = 3.5, 7.16
 
 
-SAVED = {"tables": [], "figures": []}  # names written so far, listed by the export index
+SAVED = {"tables": [], "figures": []}
 
 
 def save_table(df: pd.DataFrame, name: str, float_format: str = "%.1f") -> None:
@@ -671,11 +615,7 @@ show_figure(fig)
 # %% [markdown]
 # ## 1.4 Fixed qualitative image lists
 #
-# The qualitative section compares all policies on the *same* images, so the image list is
-# fixed before any training: every test image, plus 600 internal-validation images that
-# include at least 50 uncertain-labelled images per pathology (topped up with random images).
-# Like the split, `qual/qual_ids.csv` is created once outside Kaggle, committed, and only read
-# by runs.
+# Fixed list of images for the qualitative part, so every policy is shown on the same images.
 
 # %%
 QUAL_PATH = REPO_DIR / "qual" / "qual_ids.csv"
@@ -728,17 +668,8 @@ print("uncertain per pathology in the val subset:", qual_uncertain.to_dict())
 # %% [markdown]
 # ## 1.5 Dataset and loaders
 #
-# Images are read as grayscale and resized directly to 320 x 320 (no letterboxing), so a
-# sample is a uint8 tensor of shape (1, 320, 320) with its raw labels in {-1, 0, 1}; each
-# policy decides later what -1 means. Training augmentation runs on the CPU workers: rotation
-# up to 10 degrees, a random resized crop keeping 90-100% of the area, and brightness and
-# contrast jitter of 0.1. There is no horizontal flip (it would move the heart to the right).
-# Conversion to float, the copy to three channels and ImageNet normalisation happen on the
-# GPU (`to_model_input`), which keeps the CPU workers and the host-to-device copy light.
-#
-# The training order comes from `EpochSampler`, a permutation that depends only on the seed
-# and the epoch. Two policies run with the same seed therefore see the same images in the same
-# order with the same augmentation, whoever runs them and whenever.
+# Images are resized to 320 x 320 with small random rotations, crops and brightness changes. No
+# flips. Same seed means same image order for every policy.
 
 # %%
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
@@ -820,8 +751,6 @@ def make_loader(
         prefetch_factor=4 if workers > 0 else None,
         worker_init_fn=seed_worker,
         generator=torch.Generator().manual_seed(seed),
-        # Notebook-defined classes cannot be pickled to spawned or forkserver workers. Fork is the
-        # Linux default up to Python 3.13 but not from 3.14, so ask for it explicitly.
         multiprocessing_context="fork" if workers > 0 and sys.platform == "linux" else None,
     )
 
@@ -835,7 +764,6 @@ def to_model_input(x: torch.Tensor, device: torch.device) -> torch.Tensor:
     return x
 
 
-# Sanity checks on a small slice of the training split.
 probe = TRAIN.iloc[:64]
 x0, y0, i0 = CheXpertDataset(probe, augment=True)[0]
 size = CONFIG["image_size"]
@@ -872,15 +800,7 @@ print(f"loader ok: batch {tuple(batch.shape)}, order and augmentation reproducib
 #
 # ## 2.1 Model
 #
-# DenseNet-121 with ImageNet weights, every layer trainable. The model is split into
-# `extract_features` (the final ReLU feature map, globally average-pooled to 1024 values) and
-# `classify` (optional dropout, then one linear layer with 5 outputs, or 15 for U-MultiClass).
-# The split lets MC Dropout compute the backbone once and repeat only the cheap head.
-#
-# `cam` returns class activation maps: the head weights for the chosen output rows applied to
-# the final 10 x 10 feature map (plus the bias), so the spatial mean of a map equals the logit.
-# The head is initialised from the run seed alone, so it does not depend on how much random
-# state earlier cells used.
+# DenseNet-121 pretrained on ImageNet, all layers trained, with a new last layer.
 
 # %%
 DENSENET_FEATURES = 1024
@@ -928,7 +848,6 @@ def count_trainable_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-# Sanity checks without downloading weights (random backbone, one 320 x 320 batch of two).
 probe_x = torch.randn(2, 3, CONFIG["image_size"], CONFIG["image_size"])
 model = DenseNetClassifier(5, dropout_p=0.3, seed=SEED, pretrained=False).eval()
 with torch.no_grad():
@@ -949,7 +868,7 @@ assert torch.equal(same.head.weight, model.head.weight), "head init must depend 
 other = DenseNetClassifier(5, dropout_p=0.0, seed=other_seed, pretrained=False)
 assert not torch.equal(other.head.weight, model.head.weight), "head init must change with seed"
 
-backbone_params = 6_953_856  # torchvision DenseNet-121 without its 1000-class classifier
+backbone_params = 6_953_856
 for n_out in (5, 15):
     n = count_trainable_params(DenseNetClassifier(n_out, 0.0, SEED, pretrained=False))
     assert n == backbone_params + DENSENET_FEATURES * n_out + n_out, (n_out, n)
@@ -959,25 +878,17 @@ del model, same, other
 # %% [markdown]
 # ## 2.2 Policy registry
 #
-# Each policy is one entry: the size of the head, the training loss, how logits become a
-# probability per pathology, and how the raw validation labels are resolved for model
-# selection. Everything else (backbone, data, optimiser, schedule) is shared.
+# What each policy does with an uncertain label (u):
 #
-# | Policy | Uncertain label u in training | Loss | Validation labels |
-# |---|---|---|---|
-# | `u_zeros` | 0 | BCE | u -> 0 |
-# | `u_ones` | 1 | BCE | u -> 1 |
-# | `u_ignore` | left out | masked BCE | u excluded |
-# | `u_multiclass` | third class | 3-way cross-entropy per pathology | u excluded |
-# | `u_ones_lsr` | fresh Uniform(0.55, 0.85) draw each step | BCE with soft targets | u -> 1 |
-# | `u_zeros_mc` | 0, dropout 0.3 before the head | BCE | u -> 0 |
-# | `u_zeros_posw` (extra) | 0, positive-class weights | weighted BCE | u -> 0 |
-#
-# Losses are computed in float32 even under mixed precision. The masked loss averages over the
-# entries that are kept, so a batch whose labels are all uncertain contributes 0, not NaN.
-# U-MultiClass encodes negative, positive and uncertain as classes 0, 1 and 2; its score is
-# softmax P(positive). `certain_labels` (u excluded) is the policy-independent view used for
-# the certain-only validation AUROC that every run logs.
+# | Policy | u becomes | Loss |
+# |---|---|---|
+# | `u_zeros` | 0 | BCE |
+# | `u_ones` | 1 | BCE |
+# | `u_ignore` | skipped | masked BCE |
+# | `u_multiclass` | its own class | cross-entropy |
+# | `u_ones_lsr` | random 0.55-0.85 | BCE |
+# | `u_zeros_mc` | 0, with dropout | BCE |
+# | `u_zeros_posw` (extra) | 0, with class weights | weighted BCE |
 
 # %%
 N_PATH = len(PATHOLOGIES)
@@ -1037,7 +948,6 @@ def resolve(uncertain_as: float):
 
 certain_labels = resolve(np.nan)
 
-# Positive-class weights for the extra experiment: n_neg / n_pos on the training split, u -> 0.
 train_positive = (label_matrix(TRAIN) == 1).sum(axis=0)
 POS_WEIGHT = torch.tensor((len(TRAIN) - train_positive) / train_positive, dtype=torch.float32)
 
@@ -1135,7 +1045,6 @@ assert POLICY in POLICIES, f"POLICY must be one of {list(POLICIES)}, got {POLICY
 
 print(f"policy {POLICY!r} selected; positive-class weights {np.round(POS_WEIGHT.numpy(), 2)}")
 
-# Hand-computed checks on a 2 x 5 example; the expected values use NumPy formulas, not torch.
 y_ex = torch.tensor([[1, 0, -1, -1, 1], [0, -1, 1, 0, -1]], dtype=torch.int8)
 z_ex = torch.tensor([[2.0, -1.0, 0.5, -0.5, 0.0], [1.0, 0.3, -2.0, 0.7, -1.5]])
 z_np, y_np = z_ex.numpy().astype(np.float64), y_ex.numpy()
@@ -1206,21 +1115,8 @@ print(f"policies ok: {', '.join(POLICIES)}")
 # %% [markdown]
 # ## 2.3 Metrics
 #
-# All metrics are written in NumPy so the evaluation is fully visible; scikit-learn appears
-# only in the checks at the end of this cell, as an independent reference.
-#
-# - **AUROC** (main metric) from average ranks, so tied scores count one half.
-# - **AUPRC** as average precision over distinct score thresholds.
-# - **F1** at the threshold that maximises Youden's J (TPR - FPR) on internal validation.
-# - **ECE** over 10 equal-width bins of the positive-class probability, and the **Brier** score.
-# - **Predictive entropy** (in nats) of the MC Dropout mean probability.
-#
-# Confidence intervals resample *patients*, not images, because images of one patient are not
-# independent. One set of 1,000 resamples (fixed seed) is drawn per evaluation set and reused
-# for every policy and metric, so differences between policies are paired. The paired p-value
-# for "policy A differs from U-Zeros" is
-# p = min(1, 2 min((1 + #{d <= 0}) / (B + 1), (1 + #{d >= 0}) / (B + 1))) over the B bootstrap
-# differences d, as in the proposal.
+# AUROC, AUPRC, F1, ECE, Brier and entropy, written by hand in NumPy. Confidence intervals come
+# from resampling patients (bootstrap).
 
 # %%
 BOOTSTRAP_SEED = CONFIG["split_seed"]
@@ -1344,7 +1240,6 @@ def paired_difference(
     return paired_summary(d, stat_a(full) - stat_b(full))
 
 
-# Checks: hand-worked values, then agreement with scikit-learn on random data with ties.
 assert auroc(np.array([0, 0, 1, 1]), np.array([0.1, 0.4, 0.35, 0.8])) == 0.75
 assert auroc(np.array([0, 1]), np.array([0.5, 0.5])) == 0.5, "a tie must count one half"
 assert np.isnan(auroc(np.array([1, 1]), np.array([0.2, 0.3])))
@@ -1360,7 +1255,7 @@ from sklearn.metrics import (
 check_rng = np.random.default_rng(0)
 for _ in range(20):
     y_r = check_rng.integers(0, 2, 300)
-    s_r = np.round(check_rng.random(300) * 0.6 + 0.4 * y_r, 2)  # rounding creates ties
+    s_r = np.round(check_rng.random(300) * 0.6 + 0.4 * y_r, 2)
     assert abs(auroc(y_r, s_r) - roc_auc_score(y_r, s_r)) < 1e-12
     assert abs(auprc(y_r, s_r) - average_precision_score(y_r, s_r)) < 1e-12
     assert abs(brier(y_r, s_r) - brier_score_loss(y_r, s_r)) < 1e-12
@@ -1369,12 +1264,10 @@ for _ in range(20):
     t = youden_threshold(y_r, s_r)
     assert abs(f1_at(y_r, s_r, t) - f1_score(y_r, s_r >= t)) < 1e-12
 
-# Perfect calibration: in every bin the positive rate equals the (constant) probability.
 p_cal = np.repeat(np.arange(0.05, 1, 0.1), 20)
 y_cal = np.concatenate([np.r_[np.ones(k), np.zeros(20 - k)] for k in range(1, 20, 2)])
 assert ece(y_cal, p_cal) < 1e-12, "ECE must be 0 for perfectly calibrated predictions"
 assert abs(ece(np.r_[np.ones(5), np.zeros(5)], np.ones(10)) - 0.5) < 1e-12
-# A probability on a bin edge belongs to the lower bin: 0.1 is in (0, 0.1], not (0.1, 0.2].
 edge_ece = ece(np.array([0, 0, 1, 1]), np.array([0.1, 0.1, 0.15, 0.15]))
 assert abs(edge_ece - 0.475) < 1e-12, edge_ece
 assert abs(binary_entropy(np.array([0.5]))[0] - np.log(2)) < 1e-9
@@ -1408,21 +1301,8 @@ print(f"metrics ok: AUROC {point:.3f} (95% CI {lo:.3f}-{hi:.3f}) on a random che
 #
 # ## 3.1 Training functions
 #
-# One recipe for every policy (proposal Table III): AdamW (lr 1e-4, betas 0.9/0.999, weight
-# decay 1e-5), batch 32, up to 10 epochs, learning rate x0.1 when the validation mean AUROC has
-# not improved for one epoch, early stopping after three epochs without improvement, FP16 mixed
-# precision on the GPU. The policy only supplies the head size, the loss and the validation
-# labels.
-#
-# Early stopping and the scheduler follow the validation mean AUROC computed with the policy's
-# own validation labels (the proposal's rule); that checkpoint is `best.pt`. Because those labels
-# differ between policies, the epoch with the best *certain-only* AUROC is also kept
-# (`best_certain.pt`) for the selection-sensitivity table T9.
-#
-# Monitoring never slows a step: one log line every 50 steps, gradient norm and loss scale
-# every 200 steps, and a background thread that samples `nvidia-smi` every 10 seconds. A
-# non-finite loss stops the run with the reason recorded. Checkpoints stay in the Kaggle
-# working directory and are never pushed.
+# Same training for all: AdamW, lr 1e-4, batch 32, max 10 epochs, lr goes down and training stops
+# early when validation AUROC stops going up.
 
 # %%
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1513,18 +1393,18 @@ def train_one_epoch(
     model.train()
     loader.sampler.set_epoch(epoch)
     n_steps, seen = len(loader), 0
-    loss_sum = torch.zeros((), device=DEVICE)  # summed on the device: no sync per step
+    loss_sum = torch.zeros((), device=DEVICE)
     start = time.perf_counter()
     for step, (x, y, _) in enumerate(loader, start=1):
         x, y = to_model_input(x, DEVICE), y.to(DEVICE, non_blocking=True)
         with torch.autocast(DEVICE.type, dtype=torch.float16, enabled=USE_AMP):
             logits = model(x)
-        loss = policy.loss(logits, y, generator)  # float32 inside every policy loss
+        loss = policy.loss(logits, y, generator)
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
         if step % RUN_LIMITS["grad_stats_every"] == 0:
             scaler.unscale_(optimizer)
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), math.inf)  # measure only
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), math.inf)
             grad_log.append(
                 {
                     "epoch": epoch,
@@ -1595,7 +1475,7 @@ def fit(
         optimizer, mode="max", factor=CONFIG["plateau_factor"], patience=CONFIG["plateau_patience"]
     )
     scaler = torch.amp.GradScaler(DEVICE.type, enabled=USE_AMP)
-    generator = torch.Generator().manual_seed(seed)  # LSR target draws
+    generator = torch.Generator().manual_seed(seed)
     train_loader = make_loader(train_df, train=True, seed=seed)
     val_loader = make_loader(val_df, train=False, seed=seed)
     y_val = label_matrix(val_df)
@@ -1636,7 +1516,7 @@ def fit(
             torch.save(model.state_dict(), ckpt_dir / "best.pt")
         if val_certain > best["best_certain.pt"][0]:
             best["best_certain.pt"] = (val_certain, epoch)
-            if improved:  # same epoch: one file, copied, so the two are identical by construction
+            if improved:
                 shutil.copyfile(ckpt_dir / "best.pt", ckpt_dir / "best_certain.pt")
             else:
                 torch.save(model.state_dict(), ckpt_dir / "best_certain.pt")
@@ -1664,7 +1544,6 @@ def fit(
     return model, summary
 
 
-# Check: every policy's loss falls on a repeated small batch (random backbone, 64 x 64 input).
 small_x = F.interpolate(batch[:8], size=64, mode="bilinear", align_corners=False)
 small_y = y_ex.repeat(4, 1)
 for name, policy in POLICIES.items():
@@ -1685,18 +1564,7 @@ print(f"training functions ok on {DEVICE}; loss falls on a repeated batch for ev
 # %% [markdown]
 # ## 3.2 Run it
 #
-# Trains the selected `POLICY` at `SEED` and writes everything a run produces into
-# `runs/<policy>_s<seed>/` (`runs_smoke/` for a smoke pass): the per-epoch metrics, gradient
-# statistics, the GPU trace, the training log and `run_info.json`. `run_info.json` records the
-# policy, seed, code version, the full `CONFIG`, the split and data fingerprints, the hardware
-# and the outcome, and its `status` moves from `running` to `trained` (and to `complete` once
-# the predictions are written in section 3.3) or `failed` with the reason. A run that dies
-# mid-way therefore never looks finished.
-#
-# Checkpoints go to `checkpoints/`, which is never pushed.
-#
-# The run claims its GitHub branch before training starts (see `RunPusher` in section 0.3) and
-# pushes the folder after every epoch, so a session that dies still leaves its history there.
+# Train the chosen policy and save its logs and metrics. It pushes to GitHub after every epoch.
 
 # %%
 RUN_NAME = f"{POLICY}_s{SEED}"
@@ -1705,7 +1573,7 @@ RUN_DIR = REPO_DIR / RUNS_SUBDIR / RUN_NAME
 CKPT_DIR = REPO_DIR / "checkpoints" / RUN_NAME
 
 
-IO_THREADS = 128  # cache warm-up threads (596 files/s measured on Kaggle); speed only
+IO_THREADS = 128
 
 
 def warm_file_cache(paths: list[Path], log: Callable[[str], None]) -> None:
@@ -1792,7 +1660,7 @@ if MODE == "train":
         n_val_images=len(val_df),
     )
     pusher = RunPusher(RUN_DIR, REPO_DIR, SMOKE, RUN_BY, log)
-    pusher.claim()  # stops here, before any training, if the branch is taken
+    pusher.claim()
     needed = pd.concat([train_df["path"], val_df["path"], TEST["path"], qual_val["path"]])
     warm_file_cache([DATA_ROOT / path for path in needed.unique()], log)
     try:
@@ -1817,7 +1685,6 @@ if MODE == "train":
     log(f"trained: best epoch {info['best_epoch']} of {info['epochs_run']} ({info['stop_reason']})")
     pusher.push(f"{RUN_NAME}: trained")
 
-    # Checks on what the run wrote.
     metrics = pd.read_csv(RUN_DIR / "metrics_epoch.csv")
     assert len(metrics) == info["epochs_run"] and not metrics.isna().any().any(), "bad epoch log"
     steps = math.ceil(len(train_df) / RUN_LIMITS["batch_size"])
@@ -1835,25 +1702,8 @@ if MODE == "train":
 # %% [markdown]
 # ## 3.3 Predictions and run artifacts
 #
-# After training, the model (restored to `best.pt`) predicts the internal-validation images and
-# the test images, and the run folder is completed:
-#
-# - `val_preds.npz`, `test_preds.npz`: image path (the row id), logits and scores. **They contain
-#   no CheXpert labels**: the repository is public and the dataset licence forbids sharing the
-#   data, so results mode joins the labels back from the CSVs by path.
-# - `val_preds_certain.npz`, `test_preds_certain.npz`: the same for `best_certain.pt`, written
-#   only when that checkpoint comes from a different epoch.
-# - `mc_val.npz`, `mc_test.npz` (MC Dropout policy only): the mean of 20 stochastic passes,
-#   its predictive entropy and the dropout-off score. `val_preds.npz` of that run is the
-#   dropout-off prediction, so both versions are available to the results tables. The backbone
-#   runs once; dropout and the linear head are applied 20 times to the cached 1024-d features,
-#   which is exactly 20 full passes because the backbone is deterministic at inference.
-# - `cam_test.npz`, `cam_val_subset.npz`: class activation maps (10 x 10) for every test image
-#   and the fixed qualitative validation images.
-# - Cost measurements in `run_info.json`: inference time per image, GFLOPs per image and, for
-#   the MC policy, the time of the 20 head passes per image.
-#
-# Finally the status becomes `complete`; a run without it is ignored by results mode.
+# Predict on validation and test with the best checkpoint. Saved files have no labels in them,
+# because we cant share CheXpert.
 
 # %%
 LABEL_KEYS = {"label", "labels", "y", "y_raw", "y_true"}
@@ -1998,7 +1848,6 @@ def gflops_per_image(model: nn.Module) -> float:
 if MODE == "train":
     model.eval()
 
-    # Primary checkpoint (best.pt): validation and test predictions.
     val_logits, test_logits = predict_df(model, val_df), predict_df(model, TEST)
     val_scores = write_predictions(policy, "val", val_df, val_logits)
     test_scores = write_predictions(policy, "test", TEST, test_logits)
@@ -2007,7 +1856,6 @@ if MODE == "train":
     assert abs(recomputed - logged) < 1e-3, f"saved predictions give {recomputed}, log {logged}"
     log(f"predictions written; validation AUROC {recomputed:.4f} matches the epoch log")
 
-    # Second checkpoint (best_certain.pt): its own files only when it is a different epoch.
     certain_differs = info["best_certain_epoch"] != info["best_epoch"]
     load_checkpoint(model, "best_certain.pt")
     if certain_differs:
@@ -2018,7 +1866,6 @@ if MODE == "train":
         assert np.allclose(same, test_logits, atol=1e-3), "best_certain.pt should equal best.pt"
     load_checkpoint(model, "best.pt")
 
-    # MC Dropout: cached-feature passes must equal a naive loop of full passes.
     if policy.mc:
         probe = next(iter(make_loader(val_df.head(4), train=False, seed=SEED, num_workers=0)))
         gap = mc_equivalence_gap(model, policy, to_model_input(probe[0], DEVICE))
@@ -2032,14 +1879,12 @@ if MODE == "train":
         assert not np.allclose(mc_val["mean"], mc_val["deterministic"]), "dropout had no effect"
         log(f"MC Dropout outputs written (cached vs naive passes differ by {gap:.1e})")
 
-    # Class activation maps: every test image and the fixed qualitative validation images.
     cam_val_df = qual_val.head(RUN_LIMITS["qual_images"]) if SMOKE else qual_val
     for name, frame in [("test", TEST), ("val_subset", cam_val_df)]:
         maps = compute_cams(model, frame, policy.cam_rows)
         assert maps.shape == (len(frame), N_PATH, 10, 10) and np.isfinite(maps).all()
         save_npz(RUN_DIR / f"cam_{name}.npz", path=frame["path"].to_numpy(dtype=str), cam=maps)
 
-    # Cost: inference time on a model-ready random batch, FLOPs and the MC head cost.
     batch = RUN_LIMITS["batch_size"]
     warmup, timed = (3, 20) if DEVICE.type == "cuda" else (1, 2)
     x_time = random_batch(batch)
@@ -2061,7 +1906,6 @@ if MODE == "train":
         )
     log(f"inference {ms_per_image:.2f} ms/image, {costs['gflops_per_image']:.1f} GFLOPs/image")
 
-    # Final check of the run folder: expected files only, small enough to push, no labels.
     expected = {
         "run_info.json", "metrics_epoch.csv", "grad_stats.csv", "train.log",
         "val_preds.npz", "test_preds.npz", "cam_test.npz", "cam_val_subset.npz",
@@ -2072,7 +1916,7 @@ if MODE == "train":
     written = {f.name for f in RUN_DIR.iterdir()}
     assert written == expected, f"unexpected run files: {written ^ expected}"
     for f in RUN_DIR.glob("*.npz"):
-        with np.load(f) as data:  # reading every array proves none needs pickle
+        with np.load(f) as data:
             arrays = {name: data[name] for name in data.files}
         assert not LABEL_KEYS & set(arrays), f"{f.name} contains labels"
     size_mb = sum(f.stat().st_size for f in RUN_DIR.iterdir()) / 1e6
@@ -2090,12 +1934,7 @@ if MODE == "train":
 # %% [markdown]
 # ## 3.4 Push to GitHub
 #
-# Pushes the finished run folder (status `complete`) to `run/<policy>_s<seed>`, then checks that
-# the branch on GitHub ends at that commit and holds exactly the files of the run folder. This
-# final push is the one that matters: it is tried three times and the notebook fails loudly if
-# it does not land, so a "successful" run is never silently missing from the branch. (If it
-# fails, the files are still in this notebook's output.) The branch holds the run folder only:
-# no code, no checkpoints (`best.pt` stays in the notebook output) and no CheXpert labels.
+# Push the finished run and check that it really got there.
 
 # %%
 if MODE == "train":
@@ -2115,23 +1954,8 @@ if MODE == "train":
 #
 # ## 4.1 Fetch the runs, inventory and consistency check
 #
-# Every run trained in its own notebook and pushed its folder to `run/<policy>_s<seed>`. This
-# part downloads those folders and lists every expected run in an **inventory**, with runs that
-# are not there (yet) shown as `missing`. Only a run that is `complete` and passes every check
-# below is used; any other run is listed with the reason. A run is comparable with the others
-# when it has
-#
-# - the same code version and the same frozen `CONFIG`,
-# - the same train/validation split and the same dataset files (their fingerprints),
-# - the same test images in the same order, and
-# - the policy and seed its branch name says, and all the files a run must write.
-#
-# `N_SEEDS` chooses how many seeds are analysed: `"1"` uses seed 42 only (the proposal's
-# protocol), `"2"` and `"3"` add seeds 43 and 44, and `"auto"` takes the largest number for
-# which every policy has finished every seed. An explicit number with runs missing stops here
-# with the list of what is missing, so a partial seed layer can never leak into the tables. The
-# extra class-weighting run (`u_zeros_posw`, seed 42) is loaded separately and is not part of
-# the six-policy comparison.
+# Download all runs and check they used the same settings and data. Missing runs are shown as
+# missing.
 
 # %%
 BRANCH_PREFIX = "smoke" if SMOKE else "run"
@@ -2219,7 +2043,7 @@ def check_run(run: Run, test_paths: list[str]) -> list[str]:
     """Reasons ``run`` cannot be combined with the others; empty when it is fine."""
     info = run.info
     if info.get("status") != "complete":
-        return []  # an unfinished run is not an error: its status column says it
+        return []
     version = CONFIG["code_version"]
     checks = [
         (
@@ -2370,20 +2194,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.2 Predictions, labels and bootstrap values
 #
-# Run folders hold image paths, logits and scores but **no labels**; the labels are joined back
-# from the dataset CSVs by image path (every path must be found). The test labels are the
-# radiologist-consensus labels of `valid.csv`; the internal-validation labels keep the original
-# -1 and are used for thresholds, checkpoint selection and the entropy analysis.
-#
-# Score used for each policy in the tables: the sigmoid probability, the softmax P(positive) for
-# U-MultiClass, and for U-Zeros+MC the **mean of the 20 MC Dropout passes** (the dropout-off score
-# is kept for the ablation in T6). F1 uses a threshold per pathology: Youden's J on the validation
-# predictions with the policy's own validation labels.
-#
-# Every metric is computed once per run on the test set and on each of the shared patient-level
-# bootstrap resamples. With several seeds the interval comes from the **seed-averaged**
-# bootstrap: each replicate averages the metric over the seeds on the same resample (predictions
-# are never averaged), and differences pair the same seed across policies.
+# Put the labels back by image path and compute every metric with intervals.
 
 # %%
 POLICY_LABELS = {
@@ -2395,8 +2206,6 @@ POLICY_LABELS = {
     "u_zeros_mc": "U-Zeros+MC",
     "u_zeros_posw": "U-Zeros+PosW",
 }
-# One fixed colour per policy from a palette checked for colour-blind separation of neighbouring
-# colours. Some hues are light on white, so every figure also carries a legend and markers.
 POLICY_COLORS = dict(
     zip(
         MAIN_POLICIES,
@@ -2428,11 +2237,11 @@ plt.rcParams.update(
 class Preds:
     """Scores of one run on the validation and test images (the runs store no labels)."""
 
-    val: np.ndarray  # (n_val, 5) scores used in the tables (MC mean for the MC policy)
+    val: np.ndarray
     test: np.ndarray
-    val_det: np.ndarray  # dropout-off scores of best.pt (the same as val/test except for MC)
+    val_det: np.ndarray
     test_det: np.ndarray
-    val_cert: np.ndarray  # dropout-off scores of best_certain.pt
+    val_cert: np.ndarray
     test_cert: np.ndarray
     val_logits: np.ndarray
     test_logits: np.ndarray
@@ -2527,8 +2336,8 @@ def boot_values(key: tuple[str, int, str]) -> tuple[np.ndarray, np.ndarray]:
 class Agg:
     """A policy variant across the analysed seeds: per-seed points and seed-averaged bootstrap."""
 
-    point_seed: np.ndarray  # (n_seeds, 5 metrics, 5 pathologies)
-    boot: np.ndarray  # (B, 5 metrics, 5 pathologies): mean over seeds on each resample
+    point_seed: np.ndarray
+    boot: np.ndarray
 
 
 def agg(policy_name: str, variant: str = "main", seeds: list[int] | None = None) -> Agg:
@@ -2606,12 +2415,11 @@ if MODE == "results":
     first_paths = next(iter(val_path_sets.values()))
     assert all(np.array_equal(first_paths, v) for v in val_path_sets.values()), "val images differ"
 
-    # Labels come from the dataset CSVs, joined by image path (every path must be found).
     missing_val = set(first_paths) - set(VAL["path"])
     assert not missing_val, f"validation paths not in the dataset: {sorted(missing_val)[:3]}"
     VAL_ROWS = VAL.set_index("path").loc[first_paths].reset_index()
-    Y_VAL = label_matrix(VAL_ROWS)  # raw: 1, 0 (negative or not mentioned), -1
-    Y_TEST = label_matrix(TEST).astype(np.float64)  # radiologist consensus: 0 or 1
+    Y_VAL = label_matrix(VAL_ROWS)
+    Y_TEST = label_matrix(TEST).astype(np.float64)
     assert set(np.unique(Y_TEST)) <= {0.0, 1.0}
     for key, preds in PREDS.items():
         assert preds.val.shape == (len(VAL_ROWS), N_PATH) and preds.test.shape == Y_TEST.shape, key
@@ -2625,8 +2433,6 @@ if MODE == "results":
         f"{len(PREDS)} runs, {len(VAL_ROWS):,} validation and {len(TEST)} test images, "
         f"{n_boot} patient-level resamples ({time.perf_counter() - start:.0f} s)"
     )
-    # Cross-check against the independently written metric code: the point estimate of the first
-    # run must equal scikit-learn's AUROC.
     first_key = next(iter(USED_RUNS))
     point = BOOT[(*first_key, "main")][0]
     expected = [roc_auc_score(Y_TEST[:, j], PREDS[first_key].test[:, j]) for j in range(N_PATH)]
@@ -2635,19 +2441,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.3 E1 to E3: baseline, hard-label policies and beyond (T1, T2, T3, T6, T7)
 #
-# **E1 (baseline).** How well does U-Zeros do under the common protocol? Its rows in T1 and T2.
-#
-# **E2 (hard-label policies).** Do U-Ones, U-Ignore and U-MultiClass beat U-Zeros? T1 gives the
-# mean over the five pathologies of AUROC, AUPRC, F1, ECE and Brier with 95% patient-level
-# bootstrap intervals, T2 the per-pathology AUROC and AUPRC, and T3 the paired AUROC
-# difference against U-Zeros with its interval and paired-bootstrap p-value. The five p-values
-# in each block are **not** corrected for multiple comparisons; read them together with the
-# intervals. The test set holds only about 200 studies, so intervals are wide and small
-# differences are not significant. Figures: ROC overlays and a forest plot of the differences.
-#
-# **E3 (beyond hard labels).** Do label smoothing (U-Ones+LSR) and MC Dropout help? They are
-# rows of the same tables. T6 separates the effect of *training with dropout* from *MC
-# inference*; T7 compares the two U-MultiClass scores.
+# Is any policy better than U-Zeros? The test set is small (~200 studies), so intervals are wide.
 
 
 # %%
@@ -2792,10 +2586,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.4 E4: generalisation across uncertain prevalence
 #
-# **Purpose.** Which policy gains most where uncertain labels are common? For every pathology the
-# table puts the uncertain prevalence in the analysis training split next to each policy's AUROC
-# difference to U-Zeros (± SD across seeds when there are several), and ranks the six policies.
-# With five pathologies this is descriptive only: no correlation test is run.
+# Does a policy help more on pathologies with many uncertain labels?
 
 
 # %%
@@ -2862,10 +2653,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.5 E5: calibration (T4, reliability diagrams)
 #
-# **Purpose.** Which policy is best calibrated? T4 gives the Expected Calibration Error (10
-# equal-width bins) and the Brier score, averaged over pathologies and per pathology. The
-# reliability diagrams pool the five pathologies for one seed: a calibrated model lies on the
-# diagonal; marker area grows with the number of predictions in the bin.
+# Which policy has probabilities closest to reality? Closer to the diagonal is better.
 
 
 # %%
@@ -2912,13 +2700,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.6 E6: does MC Dropout entropy reflect the doubt in the reports?
 #
-# **Purpose.** Is the predictive entropy of the MC Dropout model higher on images whose training
-# label was *uncertain*? The test set has no uncertain labels, so this uses the internal
-# validation images (which keep the original -1): per pathology the images are grouped as
-# negative (including *not mentioned*), positive and uncertain. The table gives the mean
-# entropy per group, the gap *uncertain minus certain* and the AUROC of entropy for telling
-# uncertain from certain images, all with 95% patient-level bootstrap intervals. The figure
-# and intervals use the first analysed seed; the gap of every seed is listed separately.
+# Is the MC Dropout model less sure on images with uncertain labels?
 
 # %%
 ENTROPY_COLUMNS = ["negative", "positive", "uncertain", "gap", "auroc"]
@@ -2991,15 +2773,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.7 E7 and E8: computational cost and class weighting (T5, T10)
 #
-# **E7 purpose.** What does each policy cost? T5 lists trainable parameters, hardware, training
-# time (total and per epoch), training throughput, inference time per image, peak GPU memory,
-# GFLOPs per image and mean GPU utilisation, from the numbers each run recorded (mean ± SD over
-# seeds when there are several). T5b compares the cost of MC inference by re-running only
-# dropout and the linear head on cached backbone features with 20 full forward passes.
-#
-# **E8 purpose.** Does positive-class weighting help the baseline (the extra experiment promised
-# in the proposal)? T10 compares `u_zeros_posw` with `u_zeros` at seed 42 only, with one paired
-# difference, so no multiplicity question arises. It is skipped when that run is absent.
+# How much time and memory each policy needs, and if class weights help U-Zeros.
 
 
 # %%
@@ -3098,12 +2872,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.8 Seed variability and checkpoint selection (T8, T9)
 #
-# **T8** (only with several seeds): per policy the mean AUROC of every seed, its mean, SD and
-# range, and whether the ranking of the six policies is the same in every seed. **T9**: the
-# proposal selects the checkpoint with the best *policy-resolved* validation AUROC, which is a
-# different target for each policy. T9 repeats the comparison with the checkpoint chosen by the
-# policy-independent *certain-only* validation AUROC (dropout off for the MC policy) and shows
-# whether any ranking changes. Headline tables keep the proposal's rule.
+# Do results change with the seed, or with a different way of picking the best checkpoint?
 
 
 # %%
@@ -3170,23 +2939,8 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.9 Qualitative evaluation
 #
-# All figures come from the saved predictions and activation maps of the first analysed seed
-# (no GPU needed); images are read from the dataset. The same cases are shown for every policy.
-#
-# 1. **Example gallery.** Per pathology, two random test images each of true positives, true
-#    negatives, false positives and false negatives of the *baseline* (fixed seed, at the
-#    baseline's validation threshold), with the probability of every policy in the caption
-#    (Z U-Zeros, O U-Ones, I U-Ignore, M U-MultiClass, L U-Ones+LSR, C U-Zeros+MC).
-# 2. **Activation maps.** For a true positive, a false negative and a false positive of the
-#    baseline, and for one validation image whose label was *uncertain*, the class activation map
-#    of each policy (head weights times the last 10 x 10 feature map, scaled to its own
-#    minimum and maximum, so it shows *where* the model looks and not how strongly).
-# 3. **Behaviour on uncertain-labelled images.** The predicted probability of every policy on
-#    the validation entries whose original label is -1: this shows the effect of the labelling
-#    choice directly.
-# 4. **Confusion matrices** on the test set at each policy's validation Youden threshold.
-# 5. **Failure cases.** The most confident wrong predictions of the baseline and of the best
-#    policy on the test set.
+# Example images, heatmaps of where the model looks, uncertain images, confusion matrices and the
+# worst mistakes, same images for every policy.
 
 # %%
 POLICY_INITIALS = dict(zip(MAIN_POLICIES, "ZOIMLC", strict=True))
@@ -3221,9 +2975,7 @@ def plot_gallery(j: int, cases: dict[str, np.ndarray]) -> None:
     """2 x 4 grid of the selected cases of pathology ``j`` with all policies' probabilities."""
     fig, axes = plt.subplots(2, 4, figsize=(PAGE_WIDTH_IN, 3.9))
     slots = [(c, k) for c in ("TP", "TN", "FP", "FN") for k in (0, 1)]
-    for ax, (category, k) in zip(
-        axes.T.flat, slots, strict=True
-    ):  # TP, TN in row 0 / FP, FN in row 1
+    for ax, (category, k) in zip(axes.T.flat, slots, strict=True):
         ax.axis("off")
         if k >= len(cases[category]):
             continue
@@ -3447,13 +3199,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.10 Training record of every run
 #
-# Each run trained in its own notebook, but only this notebook is submitted, so the training
-# record of **all** runs is rebuilt here from the files each run pushed (`metrics_epoch.csv`,
-# `train.log`, `grad_stats.csv`, `gpu_trace.csv`, `run_info.json`): the per-epoch table, the
-# stopping reason, the beginning and end of the training log and the gradient and GPU summaries
-# of every policy (and the extra class-weighting run), then training curves of all policies on
-# shared axes. With several seeds the tables show the first seed, the curves show the mean over
-# seeds with the minimum-to-maximum band, and the long table `T_training_record` lists every run.
+# Training tables, logs and curves of all runs.
 
 # %%
 EPOCH_COLUMNS = ["epoch", "train_loss", "val_auroc", "val_auroc_certain", "lr", "train_seconds",
@@ -3558,9 +3304,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.11 Export index
 #
-# Every table was written as CSV and LaTeX (`booktabs`) and every figure as vector PDF and a
-# 300 dpi PNG at the moment it was made, into `results/tables/` and `results/figures/`. This
-# cell checks that every file exists and lists what was produced.
+# Check that every table and figure file was saved.
 
 
 # %%
@@ -3591,11 +3335,7 @@ if MODE == "results":
 # %% [markdown]
 # ## 4.12 Findings
 #
-# Sentences with the numbers generated from the results above, so the paper can quote them
-# without retyping. They report what the data show, including intervals that contain zero; the
-# test set has only a few hundred images, so most differences between policies are small
-# compared with their uncertainty. P-values are paired-bootstrap p-values, **not** corrected for
-# the five comparisons per row.
+# Main results as short sentences with the numbers.
 
 
 # %%
