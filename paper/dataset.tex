@@ -1,0 +1,94 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx} % Added to resize the table to fit one column
+
+% correct bad hyphenation here
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\IEEEoverridecommandlockouts
+
+\begin{document}
+%
+% paper title
+\title{Dataset Description}
+
+\author{
+\IEEEauthorblockN{Arham Basit, Muhammad Hassaan Moazan, and Yasir Zafar}
+\IEEEauthorblockA{23L-3016, 23L-3003, 23L-3029\\
+Software Engineering, FAST NUCES }
+}
+
+\maketitle
+
+\section{Dataset Selection and Justification}
+The dataset selected for this project is CheXpert (Chest eXpert), released by the Stanford University Machine Learning Group and Department of Radiology. CheXper is utilized because it is the dataset that originally introduced explicit uncertainty labels for multi-label chest X-ray classification. It remains the primary benchmark against which almost every modern uncertainty-resolution method is evaluated. Using CheXpert allows for direct comparison with a large existing body of published work, which would not be possible with datasets that lack a native uncertainty label, such as ChestX-ray14.
+
+\section{Data Source}
+\begin{itemize}
+\item \textbf{Source:} Stanford University Machine Learning Group (Stanford AIMI).
+\item \textbf{Original Publication:} Irvin et al.\ (2019), AAAI Conference on Artificial Intelligence.
+\item \textbf{Access:} CheXpert Plus
+\item \textbf{License/Terms:} Released for research use under a Stanford data use agreement; it is not licensed for unrestricted redistribution or commercial use.
+\end{itemize}
+
+\section{Dataset Composition}
+CheXpert consists of 224,316 chest radiographs from 65,240 patients.
+
+The radiographs were collected from patients who underwent examinations at Stanford Hospital between October 2002 and July 2017.
+
+Every image is paired with a label vector over 14 thoracic observations, automatically extracted from the free-text Impression section of the corresponding radiology report by a rule based NLP labeler.
+
+For each of the 14 observations, the labeler assigns one of four values:
+\begin{itemize}
+\item \textbf{Positive (1):} The observation is explicitly confirmed present.
+\item \textbf{Negative (0):} The observation is explicitly confirmed absent.
+\item \textbf{Uncertain ($-1$):} The report uses hedging language (e.g., ``cannot exclude'', ``likely represents'') indicating diagnostic ambiguity, or the finding is mentioned with explicitly conflicting information.
+\item \textbf{Not mentioned (blank):} The observation is not referenced in the report at all.
+\end{itemize}
+
+\section{Reference Standards and Splits}
+CheXpert provides three tiers of data utilized in model evaluation:
+\begin{itemize}
+\item \textbf{Training set:} 223,414 studies with labels generated automatically by the NLP labeler.
+\item \textbf{Validation set:} 200 studies, manually annotated by a consensus of 3 board certified radiologists who interpreted the radiographs directly.
+\item \textbf{Test set:} 500 studies, annotated by a consensus of 5 board certified radiologists. Official test set labels are not publicly released, requiring researchers to construct internal validation splits for hyperparameter tuning.
+\end{itemize}
+
+\section{Label Distribution and Uncertainty Prevalence}
+The uncertain category is a first class, non-trivial part of the label space. Its prevalence varies substantially by pathology, ranging from as low as 0.29\% for Fracture to as high as 15.09\% for Atelectasis.
+
+\begin{table}[htbp]
+\centering
+\caption{CheXpert Training-Set Label Distribution}
+\label{tab:labeldist}
+\resizebox{\columnwidth}{!}{%
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Pathology} & \textbf{Pos.} & \textbf{Unc.} & \textbf{Neg.} & \textbf{Not Mentioned} \\
+\midrule
+Atelectasis & 33,385 (14.9\%) & 33,725 (15.1\%) & 1,326 (0.6\%) & 155,026 (69.4\%) \\
+Cardiomegaly & 26,996 (12.1\%) & 8,095 (3.6\%) & 11,126 (5.0\%) & 177,245 (79.3\%) \\
+Consolidation & 14,790 (6.6\%) & 27,727 (12.4\%) & 28,116 (12.6\%) & 152,829 (68.4\%) \\
+Edema & 52,245 (23.4\%) & 12,984 (5.8\%) & 20,735 (9.3\%) & 137,498 (61.5\%) \\
+Pleural Effusion & 86,174 (38.6\%) & 11,629 (5.2\%) & 35,425 (15.8\%) & 90,234 (40.4\%) \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\section{Relevance to the Perception Problem}
+Multi-label CXR classification is a canonical visual perception task where the goal is to infer the presence or absence of multiple, potentially co-occurring, visually grounded pathologies. CheXpert is ideally suited for this because its uncertainty labels arise from genuine clinical ambiguity rather than synthetic noise injection. The differing uncertainty prevalence across the 14 pathologies enables a controlled comparison of resolution strategies, while the well documented radiologist annotated validation set allows model outputs to be compared against human expert performance.
+
+\newpage
+\section{Known Limitations and Ethical Considerations}
+\begin{itemize}
+\item The training labels are generated by an automated labeler operating on report text, not by direct image review, which introduces label noise.
+\item Because the dataset originates from a single US academic medical center (Stanford Hospital), models trained on it may not perfectly generalize to other patient populations, scanner hardware, or reporting styles.
+\item The lack of public test-set labels means different studies must construct their own internal validation splits, which affects direct numerical comparability with prior published results.
+\item Access requires agreeing to Stanford's Research Use Agreement, and the dataset may not be redistributed outside those terms.
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,17 @@
+# LaTeX build output
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+.direnv/
+
+# CheXpert images may not be redistributed and this repo is public: the figures that show
+# X-rays (galleries, activation maps, failure cases) and the compiled PDF stay local.
+figures/Q1_*
+figures/Q2_*
+figures/Q5_*
+Proposal.pdf
